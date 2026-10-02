@@ -282,6 +282,9 @@ def on_ui_tabs():
                 load_to_browser = gr.Button(value="Load outdated models to browser", interactive=False, visible=False)
                 select_all_updates = gr.Button(value="Select all loaded updates", interactive=True)
                 queue_all_updates_btn = gr.Button(value="Queue all found updates", interactive=False)
+                show_installed_versions_btn = gr.Button(value="Show installed versions per model", interactive=True)
+            with gr.Row():
+                installed_versions_html = gr.HTML(value='<div style="min-height: 0px;"></div>')
             with gr.Row():
                 version_progress = gr.HTML(value='<div style="min-height: 0px;"></div>')
             with gr.Row():
@@ -641,6 +644,12 @@ def on_ui_tabs():
             inputs=[download_start, create_json, download_manager_html],
             outputs=[download_model, cancel_model, cancel_all_model,
                      download_start, download_progress, download_manager_html]
+        )
+
+        show_installed_versions_btn.click(
+            fn=_file.show_installed_versions,
+            inputs=None,
+            outputs=[installed_versions_html]
         )
         
         
