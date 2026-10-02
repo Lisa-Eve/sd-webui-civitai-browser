@@ -543,19 +543,27 @@ def update_model_versions(model_id, json_input=None):
                 versions_dict[version['name']].append(item["name"])
                 for version_file in version['files']:
                     file_sha256 = version_file.get('hashes', {}).get('SHA256', "").upper()
-                    version_filename = os.path.splitext(version_file['name'])[0]
-                    version_extension = os.path.splitext(version_file['name'])[1]
-                    version_filename = f"{version_filename}_{version_file['id']}{version_extension}"
-                    version_files.add((version['name'], version_filename, file_sha256))
+                    original_name = version_file['name']
+                    stem, extension = os.path.splitext(original_name)
+                    # Installed files keep their plain CivitAI name. The previous code
+                    # only built the file-id form, so the name lookup could never match
+                    # and a model without a stored sha256 was reported as missing.
+                    id_suffixed = f"{stem}_{version_file['id']}{extension}".casefold()
+                    version_files.add((version['name'], original_name.casefold(),
+                                       id_suffixed, file_sha256))
 
             installed_names, installed_hashes = installed_inventory(model_folder)
-            for version_name, version_filename, file_sha256 in version_files:
-                if version_filename.casefold() in installed_names or (file_sha256 and file_sha256 in installed_hashes):
+            for version_name, original_name, id_suffixed, file_sha256 in version_files:
+                if (original_name in installed_names or id_suffixed in installed_names
+                        or (file_sha256 and file_sha256 in installed_hashes)):
                     installed_versions.add(version_name)
 
             version_names = list(versions_dict.keys())
             display_version_names = [f"{v} [Installed]" if v in installed_versions else v for v in version_names]
-            default_installed = next((f"{v} [Installed]" for v in installed_versions), None)
+            # Walk version_names in API order so the default selection is stable; the
+            # installed set is unordered and used to pick a different default per run.
+            default_installed = next((f"{v} [Installed]" for v in version_names
+                                      if v in installed_versions), None)
             default_value = default_installed or next(iter(version_names), None)
             
             return gr.Dropdown.update(choices=display_version_names, value=default_value, interactive=True) # Version List

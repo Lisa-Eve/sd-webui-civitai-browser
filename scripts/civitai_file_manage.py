@@ -3,6 +3,7 @@ import gradio as gr
 import urllib.request
 import urllib.parse
 import urllib.error
+from html import escape
 import os
 import io
 import re
@@ -1274,3 +1275,85 @@ def cancel_scan():
         else:
             time.sleep(0.5)
             continue
+
+
+def version_overview_rows(model_item, installed_names, installed_hashes):
+    """Describe every version of one model: base model, id, files and install state.
+
+    Pure function: the caller supplies the already collected inventory so this can be
+    exercised without touching the filesystem or the CivitAI API.
+    """
+    rows = []
+    for version in model_item.get('modelVersions') or []:
+        entries = []
+        installed_any = False
+        for model_file in version.get('files') or []:
+            file_name = model_file.get('name', '')
+            file_sha256 = (model_file.get('hashes') or {}).get('SHA256', '').upper()
+            stem, extension = os.path.splitext(file_name)
+            id_suffixed = f"{stem}_{model_file.get('id')}{extension}".casefold()
+            here = (file_name.casefold() in installed_names
+                    or id_suffixed in installed_names
+                    or (file_sha256 and file_sha256 in installed_hashes))
+            installed_any = installed_any or here
+            entries.append({'name': file_name, 'sha256': file_sha256, 'installed': here})
+        rows.append({
+            'name': version.get('name', ''),
+            'version_id': version.get('id'),
+            'base_model': version.get('baseModel') or '',
+            'files': entries,
+            'installed': installed_any,
+        })
+    return rows
+
+
+def installed_version_overview(json_input=None):
+    """Per model: which versions are installed, and where they live.
+
+    Only models with at least one installed version are reported, so the list stays
+    usable when scanning large collections.
+    """
+    api_json = json_input if json_input else getattr(gl, 'json_data', None) or {}
+    overview = []
+    for item in api_json.get('items') or []:
+        model_folder = _api.contenttype_folder(item.get('type'), item.get('description'))
+        installed_names, installed_hashes = _api.installed_inventory(model_folder)
+        rows = version_overview_rows(item, installed_names, installed_hashes)
+        if any(row['installed'] for row in rows):
+            overview.append({'model_id': item.get('id'),
+                             'model_name': item.get('name', ''),
+                             'folder': model_folder,
+                             'versions': rows})
+    return overview
+
+
+def render_version_overview(overview):
+    """Render the overview as a table, marking every installed version and file."""
+    if not overview:
+        return '<div>No installed models in the current selection.</div>'
+
+    style = ('<table style="width:100%;border-collapse:collapse;font-size:0.9em">'
+             '<tr style="text-align:left;border-bottom:1px solid var(--border-color-primary)">'
+             '<th style="padding:4px">Model</th><th style="padding:4px">Version</th>'
+             '<th style="padding:4px">Base model</th><th style="padding:4px">ID</th>'
+             '<th style="padding:4px">Files</th><th style="padding:4px">State</th></tr>')
+    body = []
+    for model in overview:
+        for index, row in enumerate(model['versions']):
+            files = ', '.join(entry['name'] for entry in row['files']) or '-'
+            state = 'Installed' if row['installed'] else '-'
+            label = escape(model['model_name'])
+            if index == 0:
+                label = f"<b>{label}</b>"
+            body.append(
+                f"<tr><td style='padding:4px'>{label}</td>"
+                f"<td style='padding:4px'>{escape(str(row['name']))}</td>"
+                f"<td style='padding:4px'>{escape(str(row['base_model']))}</td>"
+                f"<td style='padding:4px'>{escape(str(row['version_id']))}</td>"
+                f"<td style='padding:4px'>{escape(files)}</td>"
+                f"<td style='padding:4px'>{state}</td></tr>")
+    return f"<div>{style}{''.join(body)}</div>"
+
+
+def show_installed_versions():
+    return gr.HTML.update(value=render_version_overview(installed_version_overview()))

@@ -733,95 +733,106 @@ def download_create_thread(download_finish, queue_trigger, progress=gr_progress_
         item['existing_path'] = preview_result[11]['value'] or item['install_path']
         item['install_path'] = item['existing_path']
         
-    gl.isDownloading = True
-    _file.make_dir(item['install_path'])
+    card_name = None
+    try:
+        gl.isDownloading = True
+        _file.make_dir(item['install_path'])
         
-    path_to_new_file = os.path.join(item['install_path'], item['model_filename'])
-    transfer_path = path_to_new_file + '.civitai-part'
+        path_to_new_file = os.path.join(item['install_path'], item['model_filename'])
+        transfer_path = path_to_new_file + '.civitai-part'
     
-    enough, free_bytes = enough_space(item['install_path'], item.get('size_bytes', 0))
-    if not enough:
-        print(f"Not enough free disk space for {item['model_filename']}: {convert_size(free_bytes)} free, {convert_size(item.get('size_bytes', 0))} required plus 512 MB reserve.")
-        gl.download_fail = True
-    else:
-        if use_aria2 and os_type != 'Darwin':
-            thread = threading.Thread(target=download_file, args=(item['dl_url'], transfer_path, item['install_path'], item['model_id'], progress))
+        enough, free_bytes = enough_space(item['install_path'], item.get('size_bytes', 0))
+        if not enough:
+            print(f"Not enough free disk space for {item['model_filename']}: {convert_size(free_bytes)} free, {convert_size(item.get('size_bytes', 0))} required plus 512 MB reserve.")
+            gl.download_fail = True
         else:
-            thread = threading.Thread(target=download_file_old, args=(item['dl_url'], transfer_path, item['model_id'], progress))
-        thread.start()
-        if progress is not None and hasattr(progress, "join"):
-            progress.join(thread)
-        else:
-            thread.join()
-        if use_aria2 and os_type != 'Darwin' and gl.download_fail is True and not gl.cancel_status:
-            print(f"Aria2 failed for {item['model_filename']}; retrying with the standard downloader.")
-            gl.download_fail = False
-            fallback = threading.Thread(target=download_file_old,
-                                        args=(item['dl_url'], transfer_path, item['model_id'], progress))
-            fallback.start()
-            if progress is not None and hasattr(progress, "join"):
-                progress.join(fallback)
+            if use_aria2 and os_type != 'Darwin':
+                thread = threading.Thread(target=download_file, args=(item['dl_url'], transfer_path, item['install_path'], item['model_id'], progress))
             else:
-                fallback.join()
-        if not gl.download_fail and not gl.cancel_status:
-            try:
-                if not os.path.exists(transfer_path):
-                    raise FileNotFoundError(transfer_path)
-                os.replace(transfer_path, path_to_new_file)
-                _api.invalidate_inventory()
-            except OSError as error:
-                print(f"Failed to finish download of {item['model_filename']}: {error}")
-                gl.download_fail = True
-    
-    if not gl.cancel_status and not gl.download_fail:
-        if os.path.exists(path_to_new_file):
-            unpackList = []
-            if unpack_zip:
+                thread = threading.Thread(target=download_file_old, args=(item['dl_url'], transfer_path, item['model_id'], progress))
+            thread.start()
+            if progress is not None and hasattr(progress, "join"):
+                progress.join(thread)
+            else:
+                thread.join()
+            if use_aria2 and os_type != 'Darwin' and gl.download_fail is True and not gl.cancel_status:
+                print(f"Aria2 failed for {item['model_filename']}; retrying with the standard downloader.")
+                gl.download_fail = False
+                fallback = threading.Thread(target=download_file_old,
+                                            args=(item['dl_url'], transfer_path, item['model_id'], progress))
+                fallback.start()
+                if progress is not None and hasattr(progress, "join"):
+                    progress.join(fallback)
+                else:
+                    fallback.join()
+            if not gl.download_fail and not gl.cancel_status:
                 try:
-                    if path_to_new_file.endswith('.zip'):
-                        directory = Path(os.path.dirname(path_to_new_file))
-                        zip_handler = ZipHandler(path_to_new_file)
+                    if not os.path.exists(transfer_path):
+                        raise FileNotFoundError(transfer_path)
+                    os.replace(transfer_path, path_to_new_file)
+                    _api.invalidate_inventory()
+                except OSError as error:
+                    print(f"Failed to finish download of {item['model_filename']}: {error}")
+                    gl.download_fail = True
+    
+        if not gl.cancel_status and not gl.download_fail:
+            if os.path.exists(path_to_new_file):
+                unpackList = []
+                if unpack_zip:
+                    try:
+                        if path_to_new_file.endswith('.zip'):
+                            directory = Path(os.path.dirname(path_to_new_file))
+                            zip_handler = ZipHandler(path_to_new_file)
                         
-                        for _, decoded_name in zip_handler.name_map.items():
-                            unpackList.append(decoded_name)
+                            for _, decoded_name in zip_handler.name_map.items():
+                                unpackList.append(decoded_name)
                         
-                        zip_handler.extract_all(directory)
-                        zip_handler.zip_ref.close()
+                            zip_handler.extract_all(directory)
+                            zip_handler.zip_ref.close()
                         
-                        print(f"Successfully extracted {item['model_filename']} to {directory}")
-                        os.remove(path_to_new_file)
-                except ImportError:
-                    print("Python module 'ZipUnicode' has not been imported correctly, cannot extract zip file. Please try to restart or install it manually.")
-                except Exception as e:
-                    print(f"Failed to extract {item['model_filename']} with error: {e}")
-            if not gl.cancel_status:
-                if item['create_json']:
-                    _file.save_model_info(item['install_path'], item['model_filename'], item['sub_folder'], item['model_sha256'], item['preview_html'], api_response=item['model_json'])
-                info_to_json(path_to_new_file, item['model_id'], item['model_sha256'], unpackList, item.get('version_id'))
-                _api.invalidate_inventory()
-                _file.save_preview(path_to_new_file, item['model_json'], True, item['model_sha256'])
-                if save_all_images:
-                    _file.save_images(item['preview_html'], item['model_filename'], item['install_path'], item['sub_folder'], api_response=item['model_json'])
+                            print(f"Successfully extracted {item['model_filename']} to {directory}")
+                            os.remove(path_to_new_file)
+                    except ImportError:
+                        print("Python module 'ZipUnicode' has not been imported correctly, cannot extract zip file. Please try to restart or install it manually.")
+                    except Exception as e:
+                        print(f"Failed to extract {item['model_filename']} with error: {e}")
+                if not gl.cancel_status:
+                    if item['create_json']:
+                        _file.save_model_info(item['install_path'], item['model_filename'], item['sub_folder'], item['model_sha256'], item['preview_html'], api_response=item['model_json'])
+                    info_to_json(path_to_new_file, item['model_id'], item['model_sha256'], unpackList, item.get('version_id'))
+                    _api.invalidate_inventory()
+                    _file.save_preview(path_to_new_file, item['model_json'], True, item['model_sha256'])
+                    if save_all_images:
+                        _file.save_images(item['preview_html'], item['model_filename'], item['install_path'], item['sub_folder'], api_response=item['model_json'])
                 
-    base_name = os.path.splitext(item['model_filename'])[0]
-    base_name_preview = base_name + '.preview'
+        base_name = os.path.splitext(item['model_filename'])[0]
+        base_name_preview = base_name + '.preview'
 
-    if gl.download_fail:
+        if gl.download_fail:
+            if gl.cancel_status:
+                print(f'Cancelled download of "{item["model_filename"]}"')
+            else:
+                if not gl.download_fail == "NO_API":
+                    print(f'Error occured during download of "{item["model_filename"]}"')
+    
         if gl.cancel_status:
-            print(f'Cancelled download of "{item["model_filename"]}"')
+            card_name = None
         else:
-            if not gl.download_fail == "NO_API":
-                print(f'Error occured during download of "{item["model_filename"]}"')
+            model_string = f"{item['model_name']} ({item['model_id']})"
+            (card_name, _, _) = _file.card_update(item['model_versions'], model_string, item['version_name'], True)
     
-    if gl.cancel_status:
-        card_name = None
-    else:
-        model_string = f"{item['model_name']} ({item['model_id']})"
-        (card_name, _, _) = _file.card_update(item['model_versions'], model_string, item['version_name'], True)
-    
-    if len(gl.download_queue) != 0:
-        gl.download_queue.pop(0)
-    gl.isDownloading = False
+    except Exception as error:
+        # Any failure below used to escape before the queue was popped, which left
+        # the finished item at gl.download_queue[0] and gl.isDownloading stuck on
+        # True. Every later download then saw a non-empty queue and refused to
+        # start, so the tool stopped downloading entirely.
+        print(f"Failed to process queued download of \"{item.get('model_filename', 'unknown model')}\": {error}")
+        gl.download_fail = True
+    finally:
+        if gl.download_queue and gl.download_queue[0] is item:
+            gl.download_queue.pop(0)
+        gl.isDownloading = False
+
     
     if len(gl.download_queue) == 0:
         finish_nr = random_number(download_finish)
