@@ -1,4 +1,6 @@
 import ast
+import hashlib
+import io
 import json
 import os
 from pathlib import Path
@@ -27,6 +29,51 @@ def load_settings_writer(config):
              'read_json': read_json, 'write_json': write_json, 'print': lambda _: None}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
     return scope['saveSettings']
+
+
+def load_gen_sha256():
+    # Needs os/io/hashlib plus the storage helpers; no WebUI or Gradio import.
+    source = Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_file_manage.py'
+    node = next(n for n in ast.parse(source.read_text(encoding='utf-8')).body
+                if isinstance(n, ast.FunctionDef) and n.name == 'gen_sha256')
+    scope = {'os': os, 'io': io, 'hashlib': hashlib,
+             'read_json': read_json, 'write_json': write_json}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
+    return scope['gen_sha256']
+
+
+def load_download_file():
+    # Isolate the aria2 path to assert the reported final path, not the transfer path.
+    source = Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_download.py'
+    node = next(n for n in ast.parse(source.read_text(encoding='utf-8')).body
+                if isinstance(n, ast.FunctionDef) and n.name == 'download_file')
+    printed = []
+    scope = {'os': os, 'json': json, 'time': types.SimpleNamespace(sleep=lambda _: None),
+             'opts': types.SimpleNamespace(), 'queue': False,
+             'gl': types.SimpleNamespace(), 'gr': types.SimpleNamespace(Progress=None),
+             'requests': types.SimpleNamespace(post=lambda *a, **k: None),
+             'rpc_secret': 'test-secret',
+             'get_download_link': lambda *a: 'https://example.invalid/model.safetensors',
+             'convert_size': lambda n: str(n),
+             'current_count': 0, 'total_count': 0,
+             'print': lambda msg: printed.append(msg)}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
+    return scope['download_file'], scope, printed
+
+
+def load_cancel_helpers():
+    source = Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_download.py'
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    wanted = {'download_cancel', 'download_cancel_all', 'await_download_stop'}
+    nodes = [n for n in tree.body
+             if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    scope = {'time': types.SimpleNamespace(sleep=lambda _: None),
+             'CANCEL_WAIT_LIMIT': 1200,
+             'gl': types.SimpleNamespace(),
+             '_file': types.SimpleNamespace(delete_model=lambda *a, **k: None),
+             'print': lambda msg: None}
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), scope)
+    return scope
 
 
 def load_queue_all(items, receiver):
@@ -90,6 +137,84 @@ class RegressionTests(unittest.TestCase):
             free = enough_space(folder, 0, reserve=0)[1]
             self.assertTrue(enough_space(folder, 0, reserve=0)[0])
             self.assertFalse(enough_space(folder, free + 1, reserve=0)[0])
+
+    def test_gen_sha256_persists_hash_when_sidecar_is_corrupt(self):
+        # The old code re-read the sidecar with a raw json.load, so a corrupt file
+        # threw before the write and the computed hash was thrown away silently.
+        gen_sha256 = load_gen_sha256()
+        with tempfile.TemporaryDirectory() as folder:
+            model = Path(folder, 'model.safetensors')
+            model.write_bytes(b'payload')
+            model.with_suffix('.json').write_text('{not valid json', encoding='utf-8')
+            value = gen_sha256(str(model))
+            self.assertEqual(value, hashlib.sha256(b'payload').hexdigest())
+            self.assertEqual(read_json(model.with_suffix('.json')), {'sha256': value})
+
+    def test_gen_sha256_keeps_existing_metadata_and_reuses_cached_hash(self):
+        gen_sha256 = load_gen_sha256()
+        with tempfile.TemporaryDirectory() as folder:
+            model = Path(folder, 'model.safetensors')
+            model.write_bytes(b'payload')
+            sidecar = model.with_suffix('.json')
+            write_json(sidecar, {'modelId': 7, 'modelVersionId': 20})
+            value = gen_sha256(str(model))
+            stored = read_json(sidecar)
+            self.assertEqual(stored['sha256'], value)
+            self.assertEqual(stored['modelId'], 7)
+            self.assertEqual(stored['modelVersionId'], 20)
+            model.write_bytes(b'changed behind our back')
+            self.assertEqual(gen_sha256(str(model)), value)
+
+    def test_aria2_download_reports_final_path_not_transfer_path(self):
+        download_file, scope, printed = load_download_file()
+
+        class Response:
+            @staticmethod
+            def post(*_args, **_kwargs):
+                return types.SimpleNamespace(text=json.dumps({'result': 'gid-1'}))
+
+        class Status:
+            calls = 0
+
+            @staticmethod
+            def post(*_args, **_kwargs):
+                Status.calls += 1
+                if Status.calls == 1:
+                    payload = {'result': {'totalLength': '10', 'completedLength': '5',
+                                          'downloadSpeed': '1', 'status': 'active'}}
+                else:
+                    payload = {'result': {'totalLength': '10', 'completedLength': '10',
+                                          'downloadSpeed': '0', 'status': 'complete'}}
+                return types.SimpleNamespace(text=json.dumps(payload))
+
+        scope['requests'] = types.SimpleNamespace(post=Status.post)
+        scope['time'] = types.SimpleNamespace(sleep=lambda _: None)
+        scope['gl'].cancel_status = False
+        scope['gl'].download_fail = False
+        with tempfile.TemporaryDirectory() as folder:
+            transfer = os.path.join(folder, 'model.safetensors.civitai-part')
+            download_file('url', transfer, folder, 7, None)
+        self.assertTrue(any(str(os.path.join(folder, 'model.safetensors')) in line
+                            for line in printed), printed)
+        self.assertFalse(any(transfer in line for line in printed), printed)
+
+    def test_cancel_helpers_do_not_hang_and_clear_queue(self):
+        scope = load_cancel_helpers()
+        scope['gl'].download_queue = [{'model_name': 'Example', 'model_id': 7,
+                                       'model_filename': 'model.safetensors',
+                                       'version_name': 'v1', 'model_versions': [],
+                                       'model_json': {}}]
+        scope['gl'].isDownloading = False
+        scope['download_cancel']()
+        self.assertTrue(scope['gl'].cancel_status)
+        scope['gl'].isDownloading = False
+        scope['download_cancel_all']()
+        self.assertEqual(scope['gl'].download_queue, [])
+
+    def test_cancel_wait_gives_up_instead_of_spinning_forever(self):
+        scope = load_cancel_helpers()
+        scope['gl'].isDownloading = True
+        self.assertFalse(scope['await_download_stop'](limit=3))
 
     def test_queue_all_uses_every_scan_result(self):
         items = [{'id': 1, 'name': 'First'}, {'id': 2, 'name': 'Last page'}]
