@@ -1,3 +1,6 @@
 __pycache__
 .vscode
 running
+aria2/_
+aria2/aria2
+aria2/aria2.exe

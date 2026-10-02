@@ -3,6 +3,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 from collections import defaultdict
 from pathlib import Path
 import tempfile
@@ -147,6 +148,33 @@ def load_download_worker():
     }
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
     return scope['download_create_thread'], scope, printed
+
+
+def load_aria2_starter():
+    source = Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_download.py'
+    node = next(n for n in ast.parse(source.read_text(encoding='utf-8')).body
+                if isinstance(n, ast.FunctionDef) and n.name == 'start_aria2_rpc')
+    recorded = {}
+    printed = []
+
+    class FakeSubprocess:
+        DEVNULL = object()
+        STDOUT = object()
+
+        @staticmethod
+        def Popen(args, **kwargs):
+            recorded['args'] = args
+            recorded['kwargs'] = kwargs
+
+    scope = {'os': os, 'shlex': shlex,
+             'time': types.SimpleNamespace(sleep=lambda _: None),
+             'subprocess': FakeSubprocess,
+             'opts': types.SimpleNamespace(), 'os_type': 'Linux',
+             'aria2path': '/tmp/aria2-for-tests', 'aria2': '/tmp/aria2-for-tests/lin/aria2',
+             'stop_rpc': ['pkill', 'aria2'], 'rpc_secret': 'unit-test-secret',
+             'print': printed.append}
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
+    return scope['start_aria2_rpc'], scope, recorded, printed
 
 
 def load_queue_all(items, receiver):
@@ -389,6 +417,54 @@ class RegressionTests(unittest.TestCase):
         self.assertIn('Installed', html)
         self.assertIn('SD 1.5', html)
         self.assertIn('No installed models', render([]))
+
+    def test_aria2_flags_are_not_shell_interpreted(self):
+        # aria2_flags is a free-text setting. It used to be interpolated into a
+        # "shell=True" command string, so a value like "; rm -rf ~" executed.
+        starter, scope, recorded, printed = load_aria2_starter()
+        with tempfile.TemporaryDirectory() as folder:
+            scope['aria2path'] = folder
+            scope['aria2'] = os.path.join(folder, 'lin', 'aria2')
+            scope['opts'].aria2_flags = '; rm -rf /tmp/nope && echo pwned'
+            scope['opts'].show_log = False
+            starter()
+        # The starter swallows failures, so prove it actually reached Popen.
+        self.assertFalse([line for line in printed if 'Failed to start' in line], printed)
+        self.assertIsInstance(recorded['args'], list)
+        self.assertNotIn('shell', recorded['kwargs'])
+        self.assertFalse(recorded['kwargs'].get('shell', False))
+        # The injected text is split into separate argv entries, never concatenated
+        # into one command line, and no entry contains a shell metacharacter chain.
+        self.assertIn(';', recorded['args'])
+        self.assertIn('&&', recorded['args'])
+        for entry in recorded['args']:
+            self.assertNotIn('&& echo', str(entry))
+
+    def test_aria2_rpc_is_not_exposed_on_all_interfaces(self):
+        # The client only ever calls http://localhost:24000 below, so listening on
+        # every interface exposed the download RPC to the whole network.
+        starter, scope, recorded, printed = load_aria2_starter()
+        with tempfile.TemporaryDirectory() as folder:
+            scope['aria2path'] = folder
+            scope['aria2'] = os.path.join(folder, 'lin', 'aria2')
+            scope['opts'].aria2_flags = ''
+            scope['opts'].show_log = True
+            starter()
+        self.assertNotIn('--rpc-listen-all', recorded['args'])
+        self.assertIn('--rpc-listen-port=24000', recorded['args'])
+        self.assertIn('--rpc-secret=unit-test-secret', recorded['args'])
+
+    def test_aria2_extra_flags_are_appended_as_separate_arguments(self):
+        starter, scope, recorded, printed = load_aria2_starter()
+        with tempfile.TemporaryDirectory() as folder:
+            scope['aria2path'] = folder
+            scope['aria2'] = os.path.join(folder, 'lin', 'aria2')
+            scope['opts'].aria2_flags = '--max-overall-download-limit=1M --seed-time=10'
+            scope['opts'].show_log = False
+            starter()
+        self.assertFalse([line for line in printed if 'Failed to start' in line], printed)
+        self.assertEqual(recorded['args'][-2:],
+                         ['--max-overall-download-limit=1M', '--seed-time=10'])
 
     def test_queue_all_uses_every_scan_result(self):
         items = [{'id': 1, 'name': 'First'}, {'id': 2, 'name': 'Last page'}]

@@ -1,6 +1,7 @@
 import requests
 import gradio as gr
 import time
+import shlex
 import subprocess
 import threading
 import os
@@ -45,16 +46,16 @@ except:
 def start_aria2_rpc():
     start_file = os.path.join(aria2path, '_')
     running_file = os.path.join(aria2path, 'running')
-    null = open(os.devnull, 'w')
-    
+
     if os.path.exists(running_file):
         try:
             if os_type == 'Linux':
                 env = os.environ.copy()
                 env['PATH'] = '/usr/bin:' + env['PATH']
-                subprocess.Popen("pkill aria2", shell=True, env=env)
+                subprocess.Popen(stop_rpc, env=env,
+                                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             else:
-                subprocess.Popen(stop_rpc, stdout=null, stderr=null)
+                subprocess.Popen(stop_rpc, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             time.sleep(1)
         except Exception as e:
             print(f"Failed to stop Aria2 RPC : {e}")
@@ -69,12 +70,22 @@ def start_aria2_rpc():
     try:
         show_log = getattr(opts, "show_log", False)
         aria2_flags = getattr(opts, "aria2_flags", "")
-        cmd = f'"{aria2}" --enable-rpc --rpc-listen-all --rpc-listen-port=24000 --rpc-secret {rpc_secret} --check-certificate=false --ca-certificate=" " --file-allocation=none {aria2_flags}'
-        subprocess_args = {'shell': True}
+        # Argument list instead of a shell string: aria2_flags is a free-text
+        # setting and was interpolated into "shell=True" command, so anything like
+        # "aria2_flags = '; rm -rf ~'" executed. The RPC is only ever reached via
+        # http://localhost:24000 below, so it is not bound to every interface either.
+        args = [aria2, '--enable-rpc', '--rpc-listen-port=24000',
+                f'--rpc-secret={rpc_secret}', '--check-certificate=false',
+                '--ca-certificate= ', '--file-allocation=none']
+        if aria2_flags:
+            args.extend(shlex.split(aria2_flags))
+        subprocess_args = {'stdin': subprocess.DEVNULL}
         if not show_log:
             subprocess_args.update({'stdout': subprocess.DEVNULL, 'stderr': subprocess.DEVNULL})
-            
-        subprocess.Popen(cmd, **subprocess_args)
+        else:
+            subprocess_args.update({'stdout': None, 'stderr': None})
+
+        subprocess.Popen(args, **subprocess_args)
         if os.path.exists(running_file):
             print("Aria2 RPC restarted")
         else:
@@ -87,13 +98,16 @@ os_type = platform.system()
 
 if os_type == 'Windows':
     aria2 = os.path.join(aria2path, 'win', 'aria2.exe')
-    stop_rpc = "taskkill /im aria2.exe /f"
+    stop_rpc = ['taskkill', '/im', 'aria2.exe', '/f']
     start_aria2_rpc()
 elif os_type == 'Linux':
     aria2 = os.path.join(aria2path, 'lin', 'aria2')
-    st = os.stat(aria2)
-    os.chmod(aria2, st.st_mode | stat.S_IEXEC)
-    stop_rpc = "pkill aria2"
+    # Previously a bare os.stat at import time: a missing or unreadable binary made
+    # the whole extension fail to import. Degrade to a logged RPC error instead.
+    if os.path.exists(aria2):
+        st = os.stat(aria2)
+        os.chmod(aria2, st.st_mode | stat.S_IEXEC)
+    stop_rpc = ['pkill', 'aria2']
     start_aria2_rpc()
 
 class TimeOutFunction(Exception):
@@ -805,9 +819,6 @@ def download_create_thread(download_finish, queue_trigger, progress=gr_progress_
                     if save_all_images:
                         _file.save_images(item['preview_html'], item['model_filename'], item['install_path'], item['sub_folder'], api_response=item['model_json'])
                 
-        base_name = os.path.splitext(item['model_filename'])[0]
-        base_name_preview = base_name + '.preview'
-
         if gl.download_fail:
             if gl.cancel_status:
                 print(f'Cancelled download of "{item["model_filename"]}"')
