@@ -358,6 +358,20 @@ def download_finish(model_filename, version, model_id):
             gr.Dropdown.update(value=version, choices=version_choices) # Version Dropdown
     )
 
+CANCEL_WAIT_LIMIT = 1200
+
+
+def await_download_stop(limit=None):
+    """Poll until gl.isDownloading clears, bounded so a stuck downloader cannot block forever."""
+    if limit is None:
+        limit = CANCEL_WAIT_LIMIT
+    for _ in range(limit):
+        if not gl.isDownloading:
+            return True
+        time.sleep(0.5)
+    return not gl.isDownloading
+
+
 def download_cancel():
     gl.cancel_status = True
     gl.download_fail = True
@@ -365,33 +379,31 @@ def download_cancel():
         item = gl.download_queue[0]
     else:
         item = None
-    
-    while True:        
-        if not gl.isDownloading:
-            if item:
-                model_string = f"{item['model_name']} ({item['model_id']})"
-                _file.delete_model(0, item['model_filename'], model_string, item['version_name'], False, model_ver=item['model_versions'], model_json=item['model_json'])
-            break
-        else:
-            time.sleep(0.5)
+
+    if await_download_stop():
+        if item:
+            model_string = f"{item['model_name']} ({item['model_id']})"
+            _file.delete_model(0, item['model_filename'], model_string, item['version_name'], False, model_ver=item['model_versions'], model_json=item['model_json'])
+    else:
+        print(f"Download of \"{item['model_filename'] if item else 'model'}\" is still running; the cancel request was recorded but cleanup is deferred.")
     return
 
 def download_cancel_all():
     gl.cancel_status = True
     gl.download_fail = True
-    
+
     if gl.download_queue:
         item = gl.download_queue[0]
-    
-    while True:
-        if not gl.isDownloading:
-            if item:
-                model_string = f"{item['model_name']} ({item['model_id']})"
-                _file.delete_model(0, item['model_filename'], model_string, item['version_name'], False, model_ver=item['model_versions'], model_json=item['model_json'])
-            gl.download_queue = []
-            break
-        else:
-            time.sleep(0.5)
+    else:
+        item = None
+
+    if await_download_stop():
+        if item:
+            model_string = f"{item['model_name']} ({item['model_id']})"
+            _file.delete_model(0, item['model_filename'], model_string, item['version_name'], False, model_ver=item['model_versions'], model_json=item['model_json'])
+        gl.download_queue = []
+    else:
+        print("Downloads are still running; the cancel request was recorded but cleanup is deferred.")
     return
 
 def convert_size(size):
@@ -417,6 +429,10 @@ def get_download_link(url, model_id):
         return None
 
 def download_file(url, file_path, install_path, model_id, progress=gr.Progress() if queue else None):
+    # Derived before the try block: the failure handler below must never depend on a
+    # local that only gets assigned once the request setup already succeeded.
+    file_name = os.path.basename(file_path)
+    final_path = os.path.join(install_path, file_name.removesuffix('.civitai-part'))
     try:
         disable_dns = getattr(opts, "disable_dns", False)
         split_aria2 = getattr(opts, "split_aria2", 64)
@@ -424,8 +440,6 @@ def download_file(url, file_path, install_path, model_id, progress=gr.Progress()
         gl.download_fail = False
         aria2_rpc_url = "http://localhost:24000/jsonrpc"
 
-        file_name = os.path.basename(file_path)
-        
         download_link = get_download_link(url, model_id)
         if not download_link:
             print(f'File: "{file_name}" not found on CivitAI servers, it looks like the file is not available for download.')
@@ -511,9 +525,11 @@ def download_file(url, file_path, install_path, model_id, progress=gr.Progress()
                     progress(progress_percent / 100, desc=f"Downloading: {file_name} - {convert_size(completed_length)}/{convert_size(total_length)} - Speed: {convert_size(download_speed)}/s - ETA: {eta_formatted} - Queue: {current_count}/{total_count}")
                 
                 if status_info['status'] == 'complete':
-                    print(f"Model saved to: {file_path}")
+                    # aria2 wrote the .civitai-part file; the caller renames it to the
+                    # final name, so report that path instead of the transfer path.
+                    print(f"Model saved to: {final_path}")
                     if progress != None:
-                        progress(1, desc=f"Model saved to: {file_path}")
+                        progress(1, desc=f"Model saved to: {final_path}")
                     gl.download_fail = False
                     return
                 

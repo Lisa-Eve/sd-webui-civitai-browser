@@ -286,49 +286,30 @@ def list_files(folders):
 
 def gen_sha256(file_path):
     json_file = os.path.splitext(file_path)[0] + ".json"
-    
-    if os.path.exists(json_file):
-        try:
-            with open(json_file, 'r', encoding="utf-8") as f:
-                data = json.load(f)
-        
-            if 'sha256' in data and data['sha256']:
-                hash_value = data['sha256']
-                return hash_value
-        except Exception as e:
-            print(f"Failed to open {json_file}: {e}")
-        
+    # Read once and reuse: the previous version re-read the sidecar with a raw
+    # json.load, so a corrupt file silently discarded the freshly computed hash
+    # instead of persisting it. read_json returns {} for missing/broken JSON.
+    data = read_json(json_file, {})
+
+    if data.get('sha256'):
+        return data['sha256']
+
     def read_chunks(file, size=io.DEFAULT_BUFFER_SIZE):
         while True:
             chunk = file.read(size)
             if not chunk:
                 break
             yield chunk
-    
+
     blocksize = 1 << 20
     h = hashlib.sha256()
-    length = 0
     with open(os.path.realpath(file_path), 'rb') as f:
         for block in read_chunks(f, size=blocksize):
-            length += len(block)
             h.update(block)
 
     hash_value = h.hexdigest()
-    
-    if os.path.exists(json_file):
-        try:
-            with open(json_file, 'r', encoding="utf-8") as f:
-                data = json.load(f)
-    
-            data['sha256'] = hash_value
-                
-            write_json(json_file, data)
-        except Exception as e:
-            print(f"Failed to open {json_file}: {e}")
-    else:
-        data = {'sha256': hash_value}
-        write_json(json_file, data)
-    
+    data['sha256'] = hash_value
+    write_json(json_file, data)
     return hash_value
 
 def convert_local_images(html):
