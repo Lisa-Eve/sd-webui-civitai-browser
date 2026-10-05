@@ -1,0 +1,28 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sd-webui-civitai-browser"
+version = "0.2.0"
+description = "CivitAI browser extension for SD WebUI / Forge (Lisa-Eve fork)"
+readme = "README.md"
+requires-python = ">=3.9"
+license = { text = "AGPL-3.0" }
+
+# Mirrors install.py so the dependency set has one source of truth in-repo.
+dependencies = [
+    "send2trash==1.8.2",
+    "ZipUnicode==1.1.1",
+    "beautifulsoup4==4.12.3",
+    "packaging==23.2",
+    "pysocks==1.7.1",
+]
+
+[tool.pytest.ini_options]
+# tests/ intentionally has no __init__.py. Without this, pytest and
+# `python3 -m unittest tests.test_regressions` fail with a confusing
+# ModuleNotFoundError. `python3 -m unittest discover -s tests` always worked,
+# and pytest needs the rootdir on sys.path to import the scripts package.
+pythonpath = ["."]
+testpaths = ["tests"]

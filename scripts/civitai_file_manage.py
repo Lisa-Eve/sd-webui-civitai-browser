@@ -1357,3 +1357,118 @@ def render_version_overview(overview):
 
 def show_installed_versions():
     return gr.HTML.update(value=render_version_overview(installed_version_overview()))
+
+
+def deletion_candidates(overview):
+    """Installed versions that are safe to offer for removal, newest one kept.
+
+    API order is newest first, so for each model every installed version except
+    the first is an older duplicate the user may want gone.
+    """
+    candidates = []
+    for model in overview:
+        installed = [row for row in model['versions'] if row['installed']]
+        for row in installed[1:]:
+            files = [entry['name'] for entry in row['files']]
+            if not files:
+                continue
+            candidates.append({
+                'label': f"{model['model_name']} - {row['name']}",
+                'model_id': model['model_id'],
+                'version_id': row['version_id'],
+                'model_folder': model['folder'],
+                'files': files,
+            })
+    return candidates
+
+
+def deletion_plan(candidates, selected_labels):
+    """Resolve selected labels to concrete files plus their sidecars."""
+    wanted = set(selected_labels or [])
+    plan = []
+    for entry in candidates:
+        if entry['label'] not in wanted:
+            continue
+        for name in entry['files']:
+            base = os.path.splitext(name)[0]
+            plan.append({
+                'label': entry['label'],
+                'model_file': os.path.join(entry['model_folder'], name),
+                'sidecars': [
+                    os.path.join(entry['model_folder'], f'{base}{suffix}')
+                    for suffix in ('.json', '.preview.png', '.api_info.json')
+                ],
+            })
+    return plan
+
+
+def execute_deletion(plan, confirmed=False, dry_run=False):
+    """Move the selected files to the trash. Requires an explicit confirmation.
+
+    Returns (moved_paths, message). Without `confirmed` nothing is touched, which
+    is the guard that keeps a stray click from removing model files.
+    """
+    if not plan:
+        return [], 'Nothing selected.'
+    if not confirmed:
+        count = len(plan)
+        return [], (f'{count} file(s) selected but NOT deleted. '
+                    'Tick the confirmation box first.')
+    if dry_run:
+        return [], 'Dry run: ' + ', '.join(item['model_file'] for item in plan)
+
+    moved, failed = [], []
+    for item in plan:
+        for path in [item['model_file'], *item['sidecars']]:
+            if not os.path.isfile(path):
+                continue
+            try:
+                send2trash(path)
+                moved.append(path)
+            except Exception:
+                try:
+                    os.remove(path)
+                    moved.append(path)
+                except Exception as error:
+                    failed.append(f'{path}: {error}')
+    message = f'Moved {len(moved)} file(s) to the trash.'
+    if failed:
+        message += f' Failed: {"; ".join(failed)}'
+    return moved, message
+
+
+def refresh_deletion_candidates():
+    """Load the overview, then offer every older installed version for removal.
+
+    The confirm checkbox starts unticked and the delete button stays disabled
+    until something is actually selected.
+    """
+    overview = installed_version_overview()
+    candidates = deletion_candidates(overview)
+    labels = [entry['label'] for entry in candidates]
+    return (
+        gr.CheckboxGroup.update(choices=labels, value=[]),
+        gr.Checkbox.update(value=False),
+        gr.Button.update(interactive=False),
+        gr.HTML.update(value=render_version_overview(overview) if overview
+                       else '<div>No installed models in the current selection.</div>'),
+    )
+
+
+def deletion_selection_changed(selected):
+    """Enable the delete button only when a selection exists."""
+    return gr.Button.update(interactive=bool(selected)),
+
+
+def run_bulk_deletion(selected, confirmed):
+    """Delete the selected older versions, but only with an explicit confirmation.
+
+    Returns the result text and resets the confirm checkbox either way, so a
+    confirmed action cannot be repeated by a second click.
+    """
+    candidates = deletion_candidates(installed_version_overview())
+    plan = deletion_plan(candidates, selected)
+    moved, message = execute_deletion(plan, confirmed=bool(confirmed))
+    if moved:
+        _api.invalidate_inventory()
+    return gr.HTML.update(value=escape(message)), gr.Checkbox.update(value=False)

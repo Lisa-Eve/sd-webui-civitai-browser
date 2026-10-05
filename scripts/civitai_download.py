@@ -499,6 +499,11 @@ def download_file(url, file_path, install_path, model_id, progress=gr.Progress()
             gl.download_fail = True
             return
             
+        # Adaptive polling: a fixed 0.25s means four aria2 RPC calls per download
+        # per second, which adds up across a queue. Poll fast while bytes arrive,
+        # then ease off up to a second when nothing is moving.
+        poll_interval = 0.25
+        last_completed = -1
         while True:
             if gl.cancel_status:
                 payload = json.dumps({
@@ -553,7 +558,12 @@ def download_file(url, file_path, install_path, model_id, progress=gr.Progress()
                     gl.download_fail = True
                     return
                     
-                time.sleep(0.25)
+                if completed_length != last_completed:
+                    last_completed = completed_length
+                    poll_interval = 0.25
+                else:
+                    poll_interval = min(poll_interval * 1.5, 1.0)
+                time.sleep(poll_interval)
 
             except Exception as e:
                 print(f"Error occurred during Aria2 status update: {e}")

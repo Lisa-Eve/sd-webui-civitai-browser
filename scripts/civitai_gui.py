@@ -286,6 +286,19 @@ def on_ui_tabs():
             with gr.Row():
                 installed_versions_html = gr.HTML(value='<div style="min-height: 0px;"></div>')
             with gr.Row():
+                deletion_candidates_group = gr.CheckboxGroup(
+                    label="Older installed versions (select to remove):", choices=[],
+                    interactive=True, elem_id="civitai_deletion_candidates")
+                confirm_deletion = gr.Checkbox(
+                    label="Yes, permanently move the selected versions to the trash.",
+                    value=False, interactive=True, elem_id="civitai_confirm_deletion")
+                delete_selected_btn = gr.Button(value="Remove selected versions",
+                                                interactive=False,
+                                                elem_id="civitai_delete_selected")
+                deletion_result = gr.HTML(value='<div style="min-height: 0px;"></div>')
+            with gr.Row():
+                copy_diagnostics_btn = gr.Button(value="Copy diagnostics", interactive=True)
+            with gr.Row():
                 version_progress = gr.HTML(value='<div style="min-height: 0px;"></div>')
             with gr.Row():
                 load_installed = gr.Button(value="Load all installed models", interactive=True, visible=True)
@@ -647,9 +660,30 @@ def on_ui_tabs():
         )
 
         show_installed_versions_btn.click(
-            fn=_file.show_installed_versions,
+            fn=_file.refresh_deletion_candidates,
             inputs=None,
-            outputs=[installed_versions_html]
+            outputs=[deletion_candidates_group, confirm_deletion,
+                     delete_selected_btn, installed_versions_html]
+        )
+
+        deletion_candidates_group.change(
+            fn=_file.deletion_selection_changed,
+            inputs=[deletion_candidates_group],
+            outputs=[delete_selected_btn]
+        )
+
+        # Deleting is gated on the confirm checkbox inside run_bulk_deletion, so a
+        # stray click on the button still only reports that confirmation is missing.
+        delete_selected_btn.click(
+            fn=_file.run_bulk_deletion,
+            inputs=[deletion_candidates_group, confirm_deletion],
+            outputs=[deletion_result, confirm_deletion]
+        )
+
+        copy_diagnostics_btn.click(
+            fn=lambda: gr.Textbox.update(value=gl.diagnostics_report()),
+            inputs=None,
+            outputs=[gr.Textbox(visible=False)]
         )
         
         
