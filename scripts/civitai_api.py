@@ -11,7 +11,7 @@ import platform
 import time
 from PIL import Image
 from io import BytesIO
-from collections import defaultdict
+from collections import defaultdict, OrderedDict
 from datetime import datetime, timezone
 from modules.images import read_info_from_image
 from modules.shared import cmd_opts, opts
@@ -24,18 +24,31 @@ import scripts.civitai_download as _download
 import scripts.civitai_file_manage as _file
 
 gl.init()
-_inventory_cache = {}
+# Bounded LRU: the cache used to grow one entry per model folder for the whole
+# session and was only emptied on invalidate_inventory(), so a long session over
+# many custom folders accumulated stale name/hash sets and the matching locations.
+_inventory_cache = OrderedDict()
+_inventory_cache_max = 8
+_inventory_ttl = 20
 
 
 def invalidate_inventory():
     _inventory_cache.clear()
 
 
+def _remember_inventory(folder, entry):
+    _inventory_cache[folder] = entry
+    _inventory_cache.move_to_end(folder)
+    while len(_inventory_cache) > _inventory_cache_max:
+        _inventory_cache.popitem(last=False)
+
+
 def installed_inventory(folder):
     """Avoid walking a large model tree on every Gradio selection or page change."""
     folder = os.path.abspath(folder)
     cached = _inventory_cache.get(folder)
-    if cached and time.monotonic() - cached[0] < 20:
+    if cached and time.monotonic() - cached[0] < _inventory_ttl:
+        _inventory_cache.move_to_end(folder)
         return cached[1], cached[2]
     names, hashes = set(), set()
     locations = {}
@@ -54,7 +67,7 @@ def installed_inventory(folder):
                         value = metadata['sha256'].upper()
                         hashes.add(value)
                         locations.setdefault(('hash', value), root)
-    _inventory_cache[folder] = (time.monotonic(), names, hashes, locations)
+    _remember_inventory(folder, (time.monotonic(), names, hashes, locations))
     return names, hashes
 
 

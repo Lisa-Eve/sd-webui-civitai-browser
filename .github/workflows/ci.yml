@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main, 'fix/**', 'feat/**', 'chore/**']
+  pull_request:
+    branches: [main]
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Syntax check (all Python)
+        run: python3 -m compileall -q scripts install.py tests
+
+      - name: Syntax check (JavaScript)
+        run: node --check javascript/civitai-html.js
+
+      - name: Test suite
+        run: python3 -m unittest discover -s tests -v
+
+      - name: Secret scan
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          if git ls-files | grep -iE '\.env$|credentials|secret|\.pem$|\.key$' ; then
+            echo "Potential secret-bearing file tracked in the repository."
+            exit 1
+          fi
+          echo "No secret-bearing filenames tracked."
+
+      - name: Test discovery works both ways
+        run: |
+          # tests/ has no __init__.py on purpose. The documented command must work.
+          python3 -m unittest discover -s tests

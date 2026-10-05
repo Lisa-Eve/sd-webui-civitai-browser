@@ -3,7 +3,8 @@ import hashlib
 import io
 import json
 import os
-import shlex
+import time
+from collections import OrderedDict
 from collections import defaultdict
 from pathlib import Path
 import tempfile
@@ -11,6 +12,8 @@ import types
 import unittest
 
 from scripts.civitai_storage import is_model_sidecar, read_json, write_json, enough_space
+
+import shlex
 
 
 def load_version_match():
@@ -175,6 +178,35 @@ def load_aria2_starter():
              'print': printed.append}
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
     return scope['start_aria2_rpc'], scope, recorded, printed
+
+
+def load_deletion_helpers():
+    source = Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_file_manage.py'
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    wanted = {'deletion_candidates', 'deletion_plan', 'execute_deletion'}
+    nodes = [n for n in tree.body
+             if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    scope = {'os': os, 'send2trash': lambda path: scope['trashed'].append(path)}
+    scope['trashed'] = []
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), scope)
+    return scope
+
+
+def load_inventory():
+    source = Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_api.py'
+    tree = ast.parse(source.read_text(encoding='utf-8'))
+    wanted = {'installed_inventory', 'invalidate_inventory', '_remember_inventory'}
+    nodes = [n for n in tree.body
+             if isinstance(n, ast.FunctionDef) and n.name in wanted]
+    scope = {'os': os, 'time': time, 'read_json': read_json,
+             'OrderedDict': OrderedDict,
+             'MODEL_EXTENSIONS': {'.safetensors', '.ckpt', '.pt', '.pth', '.th', '.zip', '.vae'},
+             'gl': types.SimpleNamespace()}
+    scope['_inventory_cache'] = OrderedDict()
+    scope['_inventory_cache_max'] = 3
+    scope['_inventory_ttl'] = 20
+    exec(compile(ast.Module(body=nodes, type_ignores=[]), str(source), 'exec'), scope)
+    return scope
 
 
 def load_queue_all(items, receiver):
@@ -465,6 +497,106 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse([line for line in printed if 'Failed to start' in line], printed)
         self.assertEqual(recorded['args'][-2:],
                          ['--max-overall-download-limit=1M', '--seed-time=10'])
+
+    def test_deletion_candidates_keep_the_newest_installed_version(self):
+        # The user asked for a way to spot old versions. Everything installed
+        # except the newest is offered for removal; the newest stays.
+        scope = load_deletion_helpers()
+        overview = [{
+            'model_id': 7, 'model_name': 'Example', 'folder': '/models',
+            'versions': [
+                {'name': 'v3.0', 'version_id': 30, 'base_model': 'SDXL',
+                 'files': [{'name': 'c.safetensors', 'installed': True}], 'installed': True},
+                {'name': 'v2.0', 'version_id': 20, 'base_model': 'SDXL',
+                 'files': [{'name': 'b.safetensors', 'installed': True}], 'installed': True},
+                {'name': 'v1.0', 'version_id': 10, 'base_model': 'SDXL',
+                 'files': [{'name': 'a.safetensors', 'installed': True}], 'installed': True},
+            ]}]
+        candidates = scope['deletion_candidates'](overview)
+        labels = [entry['label'] for entry in candidates]
+        self.assertEqual(labels, ['Example - v2.0', 'Example - v1.0'])
+        self.assertEqual([entry['version_id'] for entry in candidates], [20, 10])
+
+    def test_deletion_candidates_skip_models_with_only_one_version(self):
+        scope = load_deletion_helpers()
+        overview = [{
+            'model_id': 7, 'model_name': 'Solo', 'folder': '/models',
+            'versions': [
+                {'name': 'v1.0', 'version_id': 10, 'base_model': 'SDXL',
+                 'files': [{'name': 'a.safetensors', 'installed': True}], 'installed': True},
+                {'name': 'v0.9', 'version_id': 9, 'base_model': 'SDXL',
+                 'files': [{'name': 'old.safetensors', 'installed': False}], 'installed': False},
+            ]}]
+        self.assertEqual(scope['deletion_candidates'](overview), [])
+
+    def test_deletion_plan_includes_sidecar_files(self):
+        scope = load_deletion_helpers()
+        candidates = [{'label': 'Example - v1.0', 'model_id': 7, 'version_id': 10,
+                       'model_folder': '/models', 'files': ['a.safetensors']}]
+        plan = scope['deletion_plan'](candidates, ['Example - v1.0'])
+        self.assertEqual(len(plan), 1)
+        self.assertEqual(plan[0]['model_file'], os.path.join('/models', 'a.safetensors'))
+        names = [os.path.basename(p) for p in plan[0]['sidecars']]
+        self.assertEqual(names, ['a.json', 'a.preview.png', 'a.api_info.json'])
+
+    def test_deletion_plan_ignores_unselected(self):
+        scope = load_deletion_helpers()
+        candidates = [{'label': 'Example - v1.0', 'model_id': 7, 'version_id': 10,
+                       'model_folder': '/models', 'files': ['a.safetensors']}]
+        self.assertEqual(scope['deletion_plan'](candidates, []), [])
+        self.assertEqual(scope['deletion_plan'](candidates, ['Something else']), [])
+
+    def test_execute_deletion_requires_confirmation(self):
+        # The explicit requirement: without the confirm checkbox nothing is deleted.
+        scope = load_deletion_helpers()
+        plan = [{'label': 'Example - v1.0',
+                 'model_file': '/models/a.safetensors',
+                 'sidecars': ['/models/a.json', '/models/a.preview.png',
+                              '/models/a.api_info.json']}]
+        moved, message = scope['execute_deletion'](plan, confirmed=False)
+        self.assertEqual(moved, [])
+        self.assertEqual(scope['trashed'], [])
+        self.assertIn('NOT deleted', message)
+
+    def test_execute_deletion_moves_to_trash_when_confirmed(self):
+        scope = load_deletion_helpers()
+        with tempfile.TemporaryDirectory() as folder:
+            model_file = Path(folder, 'a.safetensors')
+            model_file.write_bytes(b'x')
+            sidecar = Path(folder, 'a.json')
+            sidecar.write_text('{}', encoding='utf-8')
+            plan = [{'label': 'Example - v1.0', 'model_file': str(model_file),
+                     'sidecars': [str(sidecar),
+                                  str(Path(folder, 'a.preview.png'))]}]
+            moved, message = scope['execute_deletion'](plan, confirmed=True)
+        self.assertEqual(len(moved), 2)  # model + existing sidecar, missing preview skipped
+        self.assertIn('Moved 2 file(s) to the trash.', message)
+        self.assertEqual(len(scope['trashed']), 2)
+
+    def test_execute_deletion_with_empty_plan_reports_nothing_selected(self):
+        scope = load_deletion_helpers()
+        moved, message = scope['execute_deletion']([], confirmed=True)
+        self.assertEqual(moved, [])
+        self.assertIn('Nothing selected', message)
+
+    def test_inventory_cache_is_bounded(self):
+        # The cache used to grow one entry per model folder for the whole session.
+        scope = load_inventory()
+        for index in range(6):
+            scope['_remember_inventory'](f'/models/{index}', (time.monotonic(),
+                                                            {'n'}, {'h'}, {}))
+        self.assertLessEqual(len(scope['_inventory_cache']), 3)
+
+    def test_inventory_cache_evicts_least_recently_used(self):
+        scope = load_inventory()
+        for name in ('a', 'b', 'c'):
+            scope['_remember_inventory'](name, (time.monotonic(), set(), set(), {}))
+        scope['_remember_inventory']('a', (time.monotonic(), set(), set(), {}))
+        scope['_remember_inventory']('d', (time.monotonic(), set(), set(), {}))
+        self.assertIn('a', scope['_inventory_cache'])
+        self.assertNotIn('b', scope['_inventory_cache'])  # least recent, not touched
+        self.assertIn('c', scope['_inventory_cache'])
+        self.assertIn('d', scope['_inventory_cache'])
 
     def test_queue_all_uses_every_scan_result(self):
         items = [{'id': 1, 'name': 'First'}, {'id': 2, 'name': 'Last page'}]
