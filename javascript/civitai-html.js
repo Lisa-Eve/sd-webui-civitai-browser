@@ -1082,11 +1082,6 @@ function createCustomSubfolder(subfolderDiv, subfolderId, subfolderValue) {
     subfolderDiv.appendChild(newContainerDiv);
 }
 
-function insertExistingSubfolders(input) {
-    const subfolder = document.querySelectorAll("civitai-custom-subfolder-div");
-    createCustomSubfolder(subfolder, Id, Value);
-}
-
 function createSubfolderButton() {
     const subfolderParent = document.getElementById("create-sub-accordion");
     const subfolderDiv = subfolderParent.querySelector(".accordion");
