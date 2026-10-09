@@ -852,3 +852,48 @@ class GlobalInitTests(unittest.TestCase):
             self.assertNotIn('SECRET_KEY_abc123', report)
             self.assertNotIn('UNLISTED_VALUE', report)
             self.assertIn('=== CivitAI Browser+ diagnostics ===', report)
+
+
+class JSPreviewSinkTests(unittest.TestCase):
+    """The JS-side preview popup must not insert CivitAI HTML via raw innerHTML.
+
+    Defense in depth: civitai_storage.sanitize_model_html is the primary
+    defense against stored XSS via CivitAI model descriptions (see the
+    SanitizeModelHtmlTests class). Even with the sanitizer in place, the JS
+    side must not assign extracted text directly to innerHTML - a future
+    change to the Python side that bypasses the sanitizer would re-open the
+    XSS chain. The fix uses DOMParser to parse the input, strips dangerous
+    tags and on* attributes, then appends the parsed body children to the
+    preview container. These tests catch the case where someone removes
+    that defense in a future refactor.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        from pathlib import Path
+        cls.js_path = (Path(__file__).resolve().parents[1]
+                       / 'javascript' / 'civitai-html.js')
+        cls.js_source = cls.js_path.read_text(encoding='utf-8')
+
+    def test_input_html_preview_content_function_exists(self):
+        self.assertIn('function inputHTMLPreviewContent', self.js_source,
+                      'inputHTMLPreviewContent missing - model preview popup broken')
+
+    def test_js_side_does_not_assign_extracted_text_to_inner_html(self):
+        self.assertNotIn('innerHTML = extractedText', self.js_source,
+                         'JS-side XSS sink reintroduced: modelInfo.innerHTML = extractedText')
+
+    def test_js_side_uses_domparser_to_parse_input(self):
+        self.assertIn('DOMParser', self.js_source,
+                      'JS-side defense-in-depth removed: DOMParser not used')
+        self.assertIn('parseFromString', self.js_source,
+                      'JS-side defense-in-depth removed: parseFromString not called')
+
+    def test_js_side_strips_on_event_handlers(self):
+        self.assertIn("startsWith('on')", self.js_source,
+                      'JS-side defense missing: on* event handler stripping not present')
+
+    def test_js_side_strips_javascript_urls(self):
+        self.assertIn('javascript:', self.js_source,
+                      'JS-side defense missing: javascript: URL stripping not present')
+

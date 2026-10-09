@@ -627,16 +627,43 @@ function inputHTMLPreviewContent(html_input) {
             extractedText = extractedText.replace(/\\n/g, ' ');
             extractedText = extractedText.replace(/\\t/g, '');
             extractedText = extractedText.replace(/\\'/g, "'");
-            
+
+            // Defense in depth: civitai_storage.sanitize_model_html is the
+            // primary defense (it strips script/style/iframe/svg/etc. tags, all
+            // on* event handlers, and dangerous URL schemes before the HTML
+            // reaches this point). Even so, a future change to the Python side
+            // that bypasses the sanitizer must not open a hole here - innerHTML
+            // activation is silent, and javascript: URLs in href/src fire on
+            // activation. Parse the input through DOMParser and drop any nodes
+            // or attributes that should not be in a model preview before the
+            // document reaches the live DOM.
+            const parsedDoc = new DOMParser().parseFromString(extractedText, 'text/html');
+            parsedDoc.querySelectorAll('script, style, iframe, object, embed, svg, math, template, noscript')
+                .forEach(function (el) { el.remove(); });
+            parsedDoc.querySelectorAll('*').forEach(function (el) {
+                for (const attr of Array.from(el.attributes)) {
+                    const attrName = attr.name.toLowerCase();
+                    if (attrName.startsWith('on')) {
+                        el.removeAttribute(attr.name);
+                    } else if ((attrName === 'href' || attrName === 'src' ||
+                                attrName === 'xlink:href' || attrName === 'formaction') &&
+                               /^\s*javascript:/i.test(attr.value)) {
+                        el.removeAttribute(attr.name);
+                    }
+                }
+            });
+
             var overlayText = document.querySelector('.civitai-overlay-text');
             var modelInfo = document.createElement('div');
-            
+
             overlayText.parentNode.removeChild(overlayText);
             if (!modelIdNotFound) {
                 inner.style.top = 0;
                 inner.style.transform = 'translate(-50%, 0)';
             }
-            modelInfo.innerHTML = extractedText;
+            while (parsedDoc.body.firstChild) {
+                modelInfo.appendChild(parsedDoc.body.firstChild);
+            }
             inner.appendChild(modelInfo);
 
             inner.style.top = 'unset';
