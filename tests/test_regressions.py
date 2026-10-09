@@ -1,5 +1,6 @@
 import ast
 import hashlib
+import sys
 import io
 import json
 import os
@@ -765,3 +766,72 @@ class SanitizerTests(unittest.TestCase):
         for pattern in ('src={uploader_avatar}', 'src="{image}"',
                         'src="{image_url}"', 'src="{model_desc}"'):
             self.assertNotIn(pattern, text, f'reintroduced raw interpolation: {pattern}')
+
+
+def _load_global_module():
+    """Import civitai_global with a stubbed WebUI opts object."""
+    import importlib
+    modules = types.ModuleType('modules')
+    shared = types.ModuleType('modules.shared')
+    shared.opts = types.SimpleNamespace(civitai_debug_prints=False)
+    saved = {name: sys.modules.get(name) for name in ('modules', 'modules.shared')}
+    sys.modules['modules'] = modules
+    sys.modules['modules.shared'] = shared
+    cwd = os.getcwd()
+    try:
+        sys.modules.pop('scripts.civitai_global', None)
+        module = importlib.import_module('scripts.civitai_global')
+        yield_module = module
+    finally:
+        os.chdir(cwd)
+        for name, value in saved.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+    return yield_module
+
+
+class GlobalInitTests(unittest.TestCase):
+    """init() must survive a fresh install where the config file does not exist."""
+
+    def test_fresh_install_creates_subfolder_config(self):
+        # Regression: the logging rewrite dropped "import json" while init() still
+        # calls json.dump. That raised NameError on every fresh install, and
+        # gl.init() runs at module level in four files, so the extension failed to
+        # load at all. Existing installs never hit it because the file was already
+        # there, which is exactly why it survived review.
+        module = _load_global_module()
+        with tempfile.TemporaryDirectory() as folder:
+            cwd = os.getcwd()
+            try:
+                os.chdir(folder)
+                module.init()
+            finally:
+                os.chdir(cwd)
+            self.assertTrue(
+                os.path.exists(os.path.join(folder, 'config_states',
+                                           'civitai_subfolders.json')))
+
+    def test_diagnostics_report_leaks_no_secret_values(self):
+        module = _load_global_module()
+        module.opts_shared = None
+        # Re-point opts at values that must never appear in the report.
+        shared = sys.modules.get('modules.shared')
+        if shared is not None:
+            shared.opts = types.SimpleNamespace(
+                civitai_debug_prints=False, show_log=True,
+                civitai_api_key='SECRET_KEY_abc123',
+                some_unlisted_setting='UNLISTED_VALUE')
+            module._debug_enabled = None
+            with tempfile.TemporaryDirectory() as folder:
+                cwd = os.getcwd()
+                try:
+                    os.chdir(folder)
+                    module.init()
+                    report = module.diagnostics_report(tail_lines=2)
+                finally:
+                    os.chdir(cwd)
+            self.assertNotIn('SECRET_KEY_abc123', report)
+            self.assertNotIn('UNLISTED_VALUE', report)
+            self.assertIn('=== CivitAI Browser+ diagnostics ===', report)
