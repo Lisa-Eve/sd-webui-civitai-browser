@@ -937,3 +937,11 @@ class JsDeadCodeTests(unittest.TestCase):
         missing = sorted(name for name in called if f'function {name}(' not in js)
         self.assertEqual(missing, [],
                          f'bound in the GUI but missing in civitai-html.js: {missing}')
+
+
+    def test_create_civit_ai_card_buttons_takes_no_argument(self):
+        # addOnClickToButtons used to pass the click-event button to
+        # createCivitAICardButtons, but the function is defined with no
+        # parameters and never used the argument. The dead argument was
+        # removed from both callers; this test prevents re-introduction.
+        self.assertIn('function createCivitAICardButtons()', self._js())

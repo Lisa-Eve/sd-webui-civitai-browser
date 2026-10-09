@@ -472,7 +472,7 @@ function addOnClickToButtons() {
         let button = document.getElementById(buttonId);
         if (button) {
             button.addEventListener('click', (event) => {
-                createCivitAICardButtons(button);
+                createCivitAICardButtons();
             });
         }
     });
@@ -482,7 +482,7 @@ function addOnClickToButtons() {
             const buttons = tab.querySelectorAll('div > button:not(:first-child)');
             buttons.forEach(button => {
                 button.addEventListener('click', (event) => {
-                    createCivitAICardButtons(button);
+                    createCivitAICardButtons();
                 });
             });
         }
