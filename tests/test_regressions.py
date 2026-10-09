@@ -943,5 +943,15 @@ class JsDeadCodeTests(unittest.TestCase):
         # addOnClickToButtons used to pass the click-event button to
         # createCivitAICardButtons, but the function is defined with no
         # parameters and never used the argument. The dead argument was
-        # removed from both callers; this test prevents re-introduction.
-        self.assertIn('function createCivitAICardButtons()', self._js())
+        # removed from both callers.
+        js = self._js()
+        import re as _re
+        self.assertIn('function createCivitAICardButtons()', js)
+        # Asserting the definition alone does not prevent re-introduction:
+        # the argument lived at the call sites, not in the signature. Every
+        # call must therefore be bare.
+        calls = _re.findall(r'createCivitAICardButtons\(([^)]*)\)', js)
+        self.assertTrue(calls, 'expected at least one call site')
+        offending = [c for c in calls if c.strip()]
+        self.assertEqual(offending, [],
+                         f'argument passed at a call site again: {offending}')
