@@ -312,7 +312,7 @@ def model_list_html(json_data):
             model_string = escape(f"{model_name_js} ({model_id})")
             model_card = f'<figure class="civmodelcard {nsfw} {installstatus}" base-model="{baseModel}" date="{date}" onclick="select_model(\'{model_string}\', event)">'
             if installstatus != "civmodelcardinstalled":
-                model_card += f'<input type="checkbox" class="model-checkbox" id="checkbox-{model_string}" onchange="multi_model_select(\'{model_string}\', \'{item["type"]}\', this.checked)" style="opacity: 0; position: absolute; top: 10px; right: 10px;">' \
+                model_card += f'<input type="checkbox" class="model-checkbox" id="checkbox-{model_string}" onchange="multi_model_select(\'{model_string}\', \'{escape(str(item["type"]), quote=True)}\', this.checked)" style="opacity: 0; position: absolute; top: 10px; right: 10px;">' \
                             + f'<label for="checkbox-{model_string}" class="custom-checkbox"></label>'
             if len(item["name"]) > 40:
                 display_name = item["name"][:40] + '...'
@@ -902,7 +902,7 @@ def update_model_info(model_string=None, model_version=None, only_html=False, in
                                 </div>
                             </dd>
                             {"<dt>Download Link</dt>" if model_url else ''}
-                            {f'<dd><a href={model_url} target="_blank">{model_url}</a></dd>' if model_url else ''}
+                            {f'<dd><a href="{escape(model_url, quote=True)}" target="_blank">{escape(model_url)}</a></dd>' if model_url else ''}
                         </dl>
                         <div style="align-self:center; min-width:320px;">
                             <div>
