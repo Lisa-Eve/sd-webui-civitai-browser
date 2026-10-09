@@ -598,6 +598,26 @@ class RegressionTests(unittest.TestCase):
         self.assertIn('c', scope['_inventory_cache'])
         self.assertIn('d', scope['_inventory_cache'])
 
+    def test_scan_clears_running_flag_when_the_scan_raises(self):
+        # file_scan used to reset gl.scan_files by hand at nine separate return
+        # points. Any exception in between left it on forever and blocked further
+        # scans permanently. One finally now covers every exit path.
+        scan, scope = load_file_scan()
+        scope['gl'].scan_files = False
+        with self.assertRaises(RuntimeError):
+            scan(['All'], 'ver', 'tag', 'inst', 'prev', False, 0, False, False)
+        self.assertFalse(scope['gl'].scan_files,
+                         'gl.scan_files stayed True after a failed scan')
+
+    def test_scan_clears_running_flag_on_the_no_selection_path(self):
+        scan, scope = load_file_scan()
+        # The GUI always enters the scan from one of the four modes; file_scan
+        # assigns its trigger number inside those branches. Mirror that here.
+        scope['from_ver'] = True
+        scope['gl'].scan_files = False
+        scan([], 'ver', 'tag', 'inst', 'prev', False, 0, False, False)
+        self.assertFalse(scope['gl'].scan_files)
+
     def test_queue_all_uses_every_scan_result(self):
         items = [{'id': 1, 'name': 'First'}, {'id': 2, 'name': 'Last page'}]
         captured = []
@@ -609,3 +629,29 @@ class RegressionTests(unittest.TestCase):
 
 if __name__ == '__main__':
     unittest.main()
+
+
+def load_file_scan():
+    """Load file_scan with stubs that let us drive the failure path."""
+    source = Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_file_manage.py'
+    node = next(n for n in ast.parse(source.read_text(encoding='utf-8')).body
+                if isinstance(n, ast.FunctionDef) and n.name == 'file_scan')
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError('scan blew up')
+
+    scope = {
+        'os': os, 'json': json, 'time': types.SimpleNamespace(sleep=lambda _: None),
+        'gr': types.SimpleNamespace(
+            HTML=types.SimpleNamespace(update=lambda **kw: kw),
+            Textbox=types.SimpleNamespace(update=lambda **kw: kw)),
+        'gl': types.SimpleNamespace(scan_files=False, update_items=[], json_data={}),
+        '_api': types.SimpleNamespace(get_proxies=lambda: ({}, True),
+                                      invalidate_inventory=lambda: None),
+        '_file': types.SimpleNamespace(get_content_choices=boom),
+        '_download': types.SimpleNamespace(random_number=lambda value: value),
+        'from_ver': False, 'from_tag': False, 'from_installed': False,
+        'from_preview': False, 'no_update': False, 'queue': False,
+    }
+    exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
+    return scope['file_scan'], scope

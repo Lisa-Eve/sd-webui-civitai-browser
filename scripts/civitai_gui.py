@@ -296,6 +296,10 @@ def on_ui_tabs():
                                                 interactive=False,
                                                 elem_id="civitai_delete_selected")
                 deletion_result = gr.HTML(value='<div style="min-height: 0px;"></div>')
+                diagnostics_output = gr.Textbox(
+                    label="Diagnostics (copy this into a bug report)",
+                    lines=8, max_lines=20, interactive=False,
+                    visible=False, elem_id="civitai_diagnostics_output")
             with gr.Row():
                 copy_diagnostics_btn = gr.Button(value="Copy diagnostics", interactive=True)
             with gr.Row():
@@ -680,10 +684,13 @@ def on_ui_tabs():
             outputs=[deletion_result, confirm_deletion]
         )
 
+        # The previous binding created its Textbox inline as an output target, so it
+        # was never part of the layout and the report went nowhere the user could see.
+        # The target now lives in the update tab and reveals itself on click.
         copy_diagnostics_btn.click(
-            fn=lambda: gr.Textbox.update(value=gl.diagnostics_report()),
+            fn=lambda: (gr.Textbox.update(value=gl.diagnostics_report(), visible=True),),
             inputs=None,
-            outputs=[gr.Textbox(visible=False)]
+            outputs=[diagnostics_output]
         )
         
         
