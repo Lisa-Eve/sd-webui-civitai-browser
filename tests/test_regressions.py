@@ -764,8 +764,25 @@ class SanitizerTests(unittest.TestCase):
         source = (Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_api.py')
         text = source.read_text(encoding='utf-8')
         for pattern in ('src={uploader_avatar}', 'src="{image}"',
-                        'src="{image_url}"', 'src="{model_desc}"'):
+                        'src="{image_url}"', 'src="{model_desc}"',
+                        'href={model_url}', "'{item[\"type\"]}"):
             self.assertNotIn(pattern, text, f'reintroduced raw interpolation: {pattern}')
+
+    def test_queue_html_has_no_raw_item_interpolation(self):
+        # download_manager_html builds its markup with a triple-quoted f-string, so
+        # the tag sits on the line AFTER the f'''. A one-line regex cannot see that
+        # and reported the queue panel as clean when it was not. This guard asserts on
+        # the pattern itself rather than on any search we might run.
+        source = (Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_download.py')
+        text = source.read_text(encoding='utf-8')
+        for pattern in ('title="{item[\'model_name\']}"',
+                        'title="{item[\'version_name\']}"',
+                        'title="{item[\'install_path\']}"'):
+            self.assertNotIn(pattern, text,
+                             f'reintroduced raw interpolation: {pattern}')
+        self.assertIn('escape(str(item[\'model_name\']), quote=True)', text)
+        self.assertIn('escape(str(item[\'version_name\']), quote=True)', text)
+        self.assertIn('escape(str(item[\'install_path\']), quote=True)', text)
 
 
 def _load_global_module():
