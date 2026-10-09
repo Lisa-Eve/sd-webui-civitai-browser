@@ -897,3 +897,43 @@ class JSPreviewSinkTests(unittest.TestCase):
         self.assertIn('javascript:', self.js_source,
                       'JS-side defense missing: javascript: URL stripping not present')
 
+
+
+class JsDeadCodeTests(unittest.TestCase):
+    """Guards for the dead-code findings, so a cleanup pass cannot undo them."""
+
+    @staticmethod
+    def _js():
+        return (Path(__file__).resolve().parents[1] / 'javascript' / 'civitai-html.js'
+                ).read_text(encoding='utf-8')
+
+    @staticmethod
+    def _gui():
+        return (Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_gui.py'
+                ).read_text(encoding='utf-8')
+
+    def test_insert_existing_subfolders_is_removed(self):
+        # Eve reported this as dead: no caller anywhere, and it referenced
+        # undefined Id/Value, so calling it raises ReferenceError under "use strict".
+        # Verified before removal, then deleted.
+        self.assertNotIn('insertExistingSubfolders', self._js())
+
+    def test_set_sortable_is_still_wired_and_must_not_be_removed(self):
+        # Eve reported setSortable as "defined but never called, dead code".
+        # That is wrong: civitai_gui.py binds it to queue_html_input.change, so it
+        # runs on every queue update and drives drag-and-drop reordering. Deleting
+        # it would silently break queue reordering, and JavaScript would not
+        # complain about a missing handler. This test exists to stop that.
+        self.assertIn('function setSortable()', self._js())
+        self.assertIn('setSortable()', self._gui())
+
+    def test_js_functions_referenced_from_python_all_exist(self):
+        # The check that was done once by eye and never kept. Every _js="...name()"
+        # binding must resolve to a function that exists in the JavaScript file.
+        import re as _re
+        js = self._js()
+        gui = self._gui()
+        called = set(_re.findall(r'_js="[^"]*?\b(\w+)\(\)', gui))
+        missing = sorted(name for name in called if f'function {name}(' not in js)
+        self.assertEqual(missing, [],
+                         f'bound in the GUI but missing in civitai-html.js: {missing}')
