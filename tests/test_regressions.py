@@ -1,11 +1,13 @@
 import ast
 import hashlib
+import sys
 import io
 import json
 import os
 import time
 from collections import OrderedDict
 from collections import defaultdict
+from html.parser import HTMLParser
 from pathlib import Path
 import tempfile
 import types
@@ -655,3 +657,198 @@ def load_file_scan():
     }
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
     return scope['file_scan'], scope
+
+
+class _AttrCollector(HTMLParser):
+    """Parse sanitized output so tests assert on attributes, not substrings."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.attrs = []
+
+    def handle_starttag(self, tag, attrs):
+        self.attrs.append((tag, dict(attrs)))
+
+    def handle_startendtag(self, tag, attrs):
+        self.attrs.append((tag, dict(attrs)))
+
+
+def _event_handler_attrs(markup):
+    parser = _AttrCollector()
+    parser.feed(markup)
+    parser.close()
+    return [name for _tag, attrs in parser.attrs
+            for name in attrs if name.lower().startswith('on')]
+
+
+def _attribute_values(markup, tag_name):
+    parser = _AttrCollector()
+    parser.feed(markup)
+    parser.close()
+    return [attrs for tag, attrs in parser.attrs if tag == tag_name]
+
+
+class SanitizerTests(unittest.TestCase):
+    """Regression guards for the XSS paths Eve found in update_model_info."""
+
+    def setUp(self):
+        from scripts.civitai_storage import sanitize_model_html
+        self.sanitize = sanitize_model_html
+
+    def test_script_tag_is_removed_with_its_body(self):
+        self.assertEqual(self.sanitize('<script>alert(1)</script>hi'), 'hi')
+
+    def test_event_handlers_are_stripped(self):
+        out = self.sanitize('<img src="https://x.test/a.png" onerror="alert(1)">')
+        self.assertEqual(_event_handler_attrs(out), [])
+        self.assertIn('https://x.test/a.png', out)
+
+    def test_unquoted_event_handler_is_stripped(self):
+        out = self.sanitize('<img src=x onerror=alert(1)>')
+        self.assertEqual(_event_handler_attrs(out), [])
+
+    def test_quotes_inside_an_attribute_cannot_inject_a_handler(self):
+        # The payload closes the alt value and tries to open a real onload. The
+        # whole thing has to end up as inert text inside the alt value.
+        out = self.sanitize('<img src="https://x.test/a.png" alt=\'a" onload="alert(1)\'>')
+        self.assertEqual(_event_handler_attrs(out), [])
+        self.assertEqual(_attribute_values(out, 'img'),
+                         [{'src': 'https://x.test/a.png',
+                           'alt': 'a" onload="alert(1)'}])
+
+    def test_relative_src_without_scheme_is_dropped(self):
+        # Not an over-strict test: a bare "x" is not a usable URL and is exactly
+        # the kind of value that would otherwise smuggle a payload.
+        self.assertEqual(_attribute_values(self.sanitize('<img src="x">'), 'img'), [{}])
+
+    def test_javascript_url_is_dropped(self):
+        out = self.sanitize('<a href="javascript:alert(1)">x</a>')
+        self.assertNotIn('javascript:', out)
+        for attrs in _attribute_values(out, 'a'):
+            self.assertNotIn('href', attrs)
+
+    def test_data_url_in_src_is_dropped(self):
+        out = self.sanitize('<img src="data:text/html;base64,PHNjcmlwdD4=">')
+        for attrs in _attribute_values(out, 'img'):
+            self.assertNotIn('src', attrs)
+
+    def test_iframe_and_svg_are_dropped(self):
+        for payload in ('<iframe src="https://x.test"></iframe>',
+                        '<svg onload="alert(1)"></svg>'):
+            out = self.sanitize(payload)
+            self.assertNotIn('<iframe', out)
+            self.assertNotIn('<svg', out)
+            self.assertEqual(_event_handler_attrs(out), [])
+
+    def test_legitimate_civitai_markup_survives(self):
+        # Escaping instead of sanitizing would break the preview entirely.
+        raw = ('<p>hello <strong>world</strong></p>'
+               '<img src="https://image.civitai.com/x.png">'
+               '<code>print(1)</code>'
+               '<a href="https://civitai.com/models/1">link</a>')
+        out = self.sanitize(raw)
+        self.assertIn('<strong>world</strong>', out)
+        self.assertIn('<code>', out)
+        self.assertEqual(_attribute_values(out, 'img'),
+                         [{'src': 'https://image.civitai.com/x.png'}])
+        self.assertEqual(_attribute_values(out, 'a'),
+                         [{'href': 'https://civitai.com/models/1'}])
+
+    def test_empty_and_none_input(self):
+        self.assertEqual(self.sanitize(''), '')
+        self.assertEqual(self.sanitize(None), '')
+
+    def test_api_module_has_no_raw_html_interpolation_left(self):
+        # Source-level guard so a future edit cannot silently reintroduce one of
+        # the four call sites that were vulnerable.
+        source = (Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_api.py')
+        text = source.read_text(encoding='utf-8')
+        for pattern in ('src={uploader_avatar}', 'src="{image}"',
+                        'src="{image_url}"', 'src="{model_desc}"',
+                        'href={model_url}', "'{item[\"type\"]}"):
+            self.assertNotIn(pattern, text, f'reintroduced raw interpolation: {pattern}')
+
+    def test_queue_html_has_no_raw_item_interpolation(self):
+        # download_manager_html builds its markup with a triple-quoted f-string, so
+        # the tag sits on the line AFTER the f'''. A one-line regex cannot see that
+        # and reported the queue panel as clean when it was not. This guard asserts on
+        # the pattern itself rather than on any search we might run.
+        source = (Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_download.py')
+        text = source.read_text(encoding='utf-8')
+        for pattern in ('title="{item[\'model_name\']}"',
+                        'title="{item[\'version_name\']}"',
+                        'title="{item[\'install_path\']}"'):
+            self.assertNotIn(pattern, text,
+                             f'reintroduced raw interpolation: {pattern}')
+        self.assertIn('escape(str(item[\'model_name\']), quote=True)', text)
+        self.assertIn('escape(str(item[\'version_name\']), quote=True)', text)
+        self.assertIn('escape(str(item[\'install_path\']), quote=True)', text)
+
+
+def _load_global_module():
+    """Import civitai_global with a stubbed WebUI opts object."""
+    import importlib
+    modules = types.ModuleType('modules')
+    shared = types.ModuleType('modules.shared')
+    shared.opts = types.SimpleNamespace(civitai_debug_prints=False)
+    saved = {name: sys.modules.get(name) for name in ('modules', 'modules.shared')}
+    sys.modules['modules'] = modules
+    sys.modules['modules.shared'] = shared
+    cwd = os.getcwd()
+    try:
+        sys.modules.pop('scripts.civitai_global', None)
+        module = importlib.import_module('scripts.civitai_global')
+        yield_module = module
+    finally:
+        os.chdir(cwd)
+        for name, value in saved.items():
+            if value is None:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = value
+    return yield_module
+
+
+class GlobalInitTests(unittest.TestCase):
+    """init() must survive a fresh install where the config file does not exist."""
+
+    def test_fresh_install_creates_subfolder_config(self):
+        # Regression: the logging rewrite dropped "import json" while init() still
+        # calls json.dump. That raised NameError on every fresh install, and
+        # gl.init() runs at module level in four files, so the extension failed to
+        # load at all. Existing installs never hit it because the file was already
+        # there, which is exactly why it survived review.
+        module = _load_global_module()
+        with tempfile.TemporaryDirectory() as folder:
+            cwd = os.getcwd()
+            try:
+                os.chdir(folder)
+                module.init()
+            finally:
+                os.chdir(cwd)
+            self.assertTrue(
+                os.path.exists(os.path.join(folder, 'config_states',
+                                           'civitai_subfolders.json')))
+
+    def test_diagnostics_report_leaks_no_secret_values(self):
+        module = _load_global_module()
+        module.opts_shared = None
+        # Re-point opts at values that must never appear in the report.
+        shared = sys.modules.get('modules.shared')
+        if shared is not None:
+            shared.opts = types.SimpleNamespace(
+                civitai_debug_prints=False, show_log=True,
+                civitai_api_key='SECRET_KEY_abc123',
+                some_unlisted_setting='UNLISTED_VALUE')
+            module._debug_enabled = None
+            with tempfile.TemporaryDirectory() as folder:
+                cwd = os.getcwd()
+                try:
+                    os.chdir(folder)
+                    module.init()
+                    report = module.diagnostics_report(tail_lines=2)
+                finally:
+                    os.chdir(cwd)
+            self.assertNotIn('SECRET_KEY_abc123', report)
+            self.assertNotIn('UNLISTED_VALUE', report)
+            self.assertIn('=== CivitAI Browser+ diagnostics ===', report)

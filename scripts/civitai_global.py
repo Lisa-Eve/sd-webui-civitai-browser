@@ -6,6 +6,7 @@ lands in a rotating log file so a running Forge install can be diagnosed after
 the fact.
 """
 
+import json
 import os
 import platform
 import sys

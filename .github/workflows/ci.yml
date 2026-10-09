@@ -16,6 +16,14 @@ jobs:
         with:
           python-version: '3.12'
 
+      - name: Install test dependencies
+        run: |
+          # The suite runs without WebUI, but it does import civitai_global, which
+          # pulls urllib3. Without this step the runner has a bare interpreter and
+          # the fresh-install regression test fails for the wrong reason.
+          python3 -m pip install --quiet --upgrade pip
+          python3 -m pip install --quiet -r requirements.txt
+
       - name: Syntax check (all Python)
         run: python3 -m compileall -q scripts install.py tests
 

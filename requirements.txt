@@ -3,3 +3,7 @@ ZipUnicode==1.1.1
 beautifulsoup4==4.12.3
 packaging==23.2
 pysocks==1.7.1
+# Imported directly by scripts/civitai_global.py init() to silence the
+# InsecureRequestWarning. It used to arrive transitively through the WebUI's
+# own requests dependency, which is why the direct import was never noticed.
+urllib3>=1.26

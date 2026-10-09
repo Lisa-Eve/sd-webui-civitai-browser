@@ -10,6 +10,7 @@ import random
 import platform
 import stat
 import json
+from html import escape
 import time
 from pathlib import Path
 from modules.shared import opts, cmd_opts
@@ -901,9 +902,9 @@ def download_manager_html(current_html):
         if not item['dl_id'] in existing_item_ids:
             download_item = f'''
                 <div class="civitai_dl_item" dl_id="{item['dl_id']}" style="display: flex; font-size: var(--section-header-text-size);">
-                <div class="dl_name" style="{get_style(1, False)}"><span title="{item['model_name']}">{item['model_name']}</span></div>
-                <div class="dl_ver" style="{get_style(0.75, True)}"><span title="{item['version_name']}">{item['version_name']}</span></div>
-                <div class="dl_path" style="{get_style(1.5, True)}"><span title="{item['install_path']}">{item['install_path']}</span></div>
+                <div class="dl_name" style="{get_style(1, False)}"><span title="{escape(str(item['model_name']), quote=True)}">{escape(str(item['model_name']))}</span></div>
+                <div class="dl_ver" style="{get_style(0.75, True)}"><span title="{escape(str(item['version_name']), quote=True)}">{escape(str(item['version_name']))}</span></div>
+                <div class="dl_path" style="{get_style(1.5, True)}"><span title="{escape(str(item['install_path']), quote=True)}">{escape(str(item['install_path']))}</span></div>
                 <div class="dl_stat" style="{get_style(1.5, True)}"><div class="dl_progress_bar" style="width:0%">In queue...</div></div>
                 <div class="dl_action_btn" style="{get_style(0.3, True)}text-align: center;"><span onclick="removeDlItem({item['dl_id']}, this)" class="civitai-btn-text" style="font-size: larger;">Remove</span></div>
                 </div>
