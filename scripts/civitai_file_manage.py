@@ -902,269 +902,269 @@ def get_save_path_and_name(install_path, file_name, api_response, sub_folder=Non
     return save_path, name
 
 def file_scan(folders, ver_finish, tag_finish, installed_finish, preview_finish, overwrite_toggle, tile_count, gen_hash, create_html, include_variants=False, progress=gr.Progress() if queue else None):
-    global no_update
-    proxies, ssl = _api.get_proxies()
     gl.scan_files = True
-    no_update = False
-    if from_ver:
-        gl.update_items = []
-        number = _download.random_number(ver_finish)
-    elif from_tag:
-        number = _download.random_number(tag_finish)
-    elif from_installed:
-        number = _download.random_number(installed_finish)
-    elif from_preview:
-        number = _download.random_number(preview_finish)
+    # Everything below used to clear gl.scan_files by hand at nine separate
+    # return points. A single exception anywhere in between left the flag on
+    # forever, which permanently blocked further scans (the same wedge class as
+    # the download queue). One finally covers every exit path instead.
+    try:
+        global no_update
+        proxies, ssl = _api.get_proxies()
+        no_update = False
+        if from_ver:
+            gl.update_items = []
+            number = _download.random_number(ver_finish)
+        elif from_tag:
+            number = _download.random_number(tag_finish)
+        elif from_installed:
+            number = _download.random_number(installed_finish)
+        elif from_preview:
+            number = _download.random_number(preview_finish)
     
-    if not folders:
-        if progress != None:
-            progress(0, desc=f"No model type selected.")
-        no_update = True
-        gl.scan_files = False
-        time.sleep(2)
-        return (gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
-                gr.Textbox.update(value=number))
-    
-    folders_to_check = []
-    if 'All' in folders:
-        folders = _file.get_content_choices()
-        
-    for item in folders:
-        if item == "LORA, LoCon, DoRA":
-            folder = _api.contenttype_folder("LORA")
-            if folder:
-                folders_to_check.append(folder)
-            folder = _api.contenttype_folder("LoCon", fromCheck=True)
-            if folder:
-                folders_to_check.append(folder)
-            folder = _api.contenttype_folder("DoRA")
-            if folder:
-                folders_to_check.append(folder)
-        elif item == "Upscaler":
-            folder = _api.contenttype_folder(item, "SwinIR")
-            if folder:
-                folders_to_check.append(folder)
-            folder = _api.contenttype_folder(item, "RealESRGAN")
-            if folder:
-                folders_to_check.append(folder)
-            folder = _api.contenttype_folder(item, "GFPGAN")
-            if folder:
-                folders_to_check.append(folder)
-            folder = _api.contenttype_folder(item, "BSRGAN")
-            if folder:
-                folders_to_check.append(folder)
-            folder = _api.contenttype_folder(item, "ESRGAN")
-            if folder:
-                folders_to_check.append(folder)
-        else:
-            folder = _api.contenttype_folder(item)
-            if folder:
-                folders_to_check.append(folder)
-        
-    total_files = 0
-    files_done = 0
-    
-    files = list_files(folders_to_check)
-    total_files += len(files)
-    
-    if total_files == 0:
-        if progress != None:
-            progress(1, desc=f"No files in selected folder.")
-        no_update = True
-        gl.scan_files = False
-        time.sleep(2)
-        return (gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
-                gr.Textbox.update(value=number))
-        
-    updated_models = []
-    outdated_models = []
-    all_model_ids = []
-    file_paths = []
-    all_ids = []
-    
-    not_found_print = getattr(opts, "civitai_not_found_print", True)
-    
-    for file_path in files:
-        if gl.cancel_status:
+        if not folders:
             if progress != None:
-                progress(files_done / total_files, desc=f"Processing files cancelled.")
+                progress(0, desc=f"No model type selected.")
             no_update = True
-            gl.scan_files = False
             time.sleep(2)
             return (gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
                     gr.Textbox.update(value=number))
-        file_name = os.path.basename(file_path)
-        if progress != None:
-            progress(files_done / total_files, desc=f"Processing file: {file_name}")
+    
+        folders_to_check = []
+        if 'All' in folders:
+            folders = _file.get_content_choices()
         
-        model_id = get_models(file_path, gen_hash)
-        if model_id == "offline":
-            print("The CivitAI servers did not respond, unable to retrieve Model ID")
-        elif model_id == "Model not found":
-            if not_found_print:
-                print(f"model: \"{file_name}\" not found on CivitAI servers.")
-        elif model_id != None:
-            all_model_ids.append(f"&ids={model_id}")
-            all_ids.append(model_id)
-            file_paths.append(file_path)
-        elif not model_id:
-            print(f"model ID not found for: \"{file_name}\"")
-        files_done += 1
+        for item in folders:
+            if item == "LORA, LoCon, DoRA":
+                folder = _api.contenttype_folder("LORA")
+                if folder:
+                    folders_to_check.append(folder)
+                folder = _api.contenttype_folder("LoCon", fromCheck=True)
+                if folder:
+                    folders_to_check.append(folder)
+                folder = _api.contenttype_folder("DoRA")
+                if folder:
+                    folders_to_check.append(folder)
+            elif item == "Upscaler":
+                folder = _api.contenttype_folder(item, "SwinIR")
+                if folder:
+                    folders_to_check.append(folder)
+                folder = _api.contenttype_folder(item, "RealESRGAN")
+                if folder:
+                    folders_to_check.append(folder)
+                folder = _api.contenttype_folder(item, "GFPGAN")
+                if folder:
+                    folders_to_check.append(folder)
+                folder = _api.contenttype_folder(item, "BSRGAN")
+                if folder:
+                    folders_to_check.append(folder)
+                folder = _api.contenttype_folder(item, "ESRGAN")
+                if folder:
+                    folders_to_check.append(folder)
+            else:
+                folder = _api.contenttype_folder(item)
+                if folder:
+                    folders_to_check.append(folder)
         
-    all_items = []
+        total_files = 0
+        files_done = 0
+    
+        files = list_files(folders_to_check)
+        total_files += len(files)
+    
+        if total_files == 0:
+            if progress != None:
+                progress(1, desc=f"No files in selected folder.")
+            no_update = True
+            time.sleep(2)
+            return (gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
+                    gr.Textbox.update(value=number))
+        
+        updated_models = []
+        outdated_models = []
+        all_model_ids = []
+        file_paths = []
+        all_ids = []
+    
+        not_found_print = getattr(opts, "civitai_not_found_print", True)
+    
+        for file_path in files:
+            if gl.cancel_status:
+                if progress != None:
+                    progress(files_done / total_files, desc=f"Processing files cancelled.")
+                no_update = True
+                time.sleep(2)
+                return (gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
+                        gr.Textbox.update(value=number))
+            file_name = os.path.basename(file_path)
+            if progress != None:
+                progress(files_done / total_files, desc=f"Processing file: {file_name}")
+        
+            model_id = get_models(file_path, gen_hash)
+            if model_id == "offline":
+                print("The CivitAI servers did not respond, unable to retrieve Model ID")
+            elif model_id == "Model not found":
+                if not_found_print:
+                    print(f"model: \"{file_name}\" not found on CivitAI servers.")
+            elif model_id != None:
+                all_model_ids.append(f"&ids={model_id}")
+                all_ids.append(model_id)
+                file_paths.append(file_path)
+            elif not model_id:
+                print(f"model ID not found for: \"{file_name}\"")
+            files_done += 1
+        
+        all_items = []
 
-    all_model_ids = list(set(all_model_ids))
+        all_model_ids = list(set(all_model_ids))
     
-    if not all_model_ids:
-        progress(1, desc=f"No model IDs could be retrieved.")
-        print("Could not retrieve any Model IDs, please make sure to turn on the \"One-Time Hash Generation for externally downloaded models.\" option if you haven't already.")
-        no_update = True
-        gl.scan_files = False
-        time.sleep(2)
-        return (gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
-                gr.Textbox.update(value=number))
+        if not all_model_ids:
+            progress(1, desc=f"No model IDs could be retrieved.")
+            print("Could not retrieve any Model IDs, please make sure to turn on the \"One-Time Hash Generation for externally downloaded models.\" option if you haven't already.")
+            no_update = True
+            time.sleep(2)
+            return (gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
+                    gr.Textbox.update(value=number))
     
-    def chunks(lst, n):
-        for i in range(0, len(lst), n):
-            yield lst[i:i + n]
+        def chunks(lst, n):
+            for i in range(0, len(lst), n):
+                yield lst[i:i + n]
             
-    if not from_installed:
-        model_chunks = list(chunks(all_model_ids, 500))
+        if not from_installed:
+            model_chunks = list(chunks(all_model_ids, 500))
+
+            base_url = "https://civitai.com/api/v1/models?limit=100&nsfw=true"
+            url_list = [f"{base_url}{''.join(chunk)}" for chunk in model_chunks]
+
+            url_count = len(all_model_ids) // 100
+            if len(all_model_ids) % 100 != 0:
+                url_count += 1
+            url_done = 0
+            api_response = {}
+            for url in url_list:
+                while url:
+                    try:
+                        if progress is not None:
+                            progress(url_done / url_count, desc=f"Sending API request... {url_done}/{url_count}")
+                        response = requests.get(url, timeout=(60,30), proxies=proxies, verify=ssl)
+                        if response.status_code == 200:
+                            api_response_json = response.json()
+
+                            all_items.extend(api_response_json['items'])
+                            metadata = api_response_json.get('metadata', {})
+                            url = metadata.get('nextPage', None)
+                        elif response.status_code == 503:
+                            print(f"Error: Received status code: {response.status_code} with URL: {url}")
+                            print(response.text)
+                            return  (
+                                gr.HTML.update(value=_api.api_error_msg("error")),
+                                gr.Textbox.update(value=number)
+                            )
+                        else:
+                            print(f"Error: Received status code {response.status_code} with URL: {url}")
+                            url = None
+                        url_done += 1
+                    except requests.exceptions.Timeout:
+                        print(f"Request timed out for {url}. Skipping...")
+                        url = None
+                    except requests.exceptions.ConnectionError:
+                        print("Failed to connect to the API. The servers might be offline.")
+                        url = None
+                    except Exception as e:
+                        print(f"An unexpected error occurred: {e}")
+                        url = None
+        
+            api_response['items'] = all_items
+            if api_response['items'] == []:
+                return  (
+                    gr.HTML.update(value=_api.api_error_msg("no_items")),
+                    gr.Textbox.update(value=number)
+                )
+        
+        if progress != None:
+            progress(1, desc="Processing final results...")
+    
+        if from_ver:
+            updated_models, outdated_models = version_match(file_paths, api_response, include_variants)
+        
+            updated_set = set(updated_models)
+            outdated_set = set(outdated_models)
+            outdated_set = {model for model in outdated_set if model[0] not in {updated_model[0] for updated_model in updated_set}}
+        
+            all_model_ids = [model[0] for model in outdated_set]
+            all_model_names = [model[1] for model in outdated_set]
+        
+            for model_name in all_model_names:
+                print(f'"{model_name}" is currently outdated.')
+        
+            if len(all_model_ids) == 0:
+                no_update = True
+                return  (
+                        gr.HTML.update(value='<div style="font-size: 24px; text-align: center; margin: 50px !important;">No updates found for selected models.</div>'),
+                        gr.Textbox.update(value=number)
+                    )
+    
+        model_chunks = list(chunks(all_model_ids, tile_count))
 
         base_url = "https://civitai.com/api/v1/models?limit=100&nsfw=true"
-        url_list = [f"{base_url}{''.join(chunk)}" for chunk in model_chunks]
-
-        url_count = len(all_model_ids) // 100
-        if len(all_model_ids) % 100 != 0:
-            url_count += 1
-        url_done = 0
-        api_response = {}
-        for url in url_list:
-            while url:
-                try:
-                    if progress is not None:
-                        progress(url_done / url_count, desc=f"Sending API request... {url_done}/{url_count}")
-                    response = requests.get(url, timeout=(60,30), proxies=proxies, verify=ssl)
-                    if response.status_code == 200:
-                        api_response_json = response.json()
-
-                        all_items.extend(api_response_json['items'])
-                        metadata = api_response_json.get('metadata', {})
-                        url = metadata.get('nextPage', None)
-                    elif response.status_code == 503:
-                        print(f"Error: Received status code: {response.status_code} with URL: {url}")
-                        print(response.text)
-                        return  (
-                            gr.HTML.update(value=_api.api_error_msg("error")),
-                            gr.Textbox.update(value=number)
-                        )
-                    else:
-                        print(f"Error: Received status code {response.status_code} with URL: {url}")
-                        url = None
-                    url_done += 1
-                except requests.exceptions.Timeout:
-                    print(f"Request timed out for {url}. Skipping...")
-                    url = None
-                except requests.exceptions.ConnectionError:
-                    print("Failed to connect to the API. The servers might be offline.")
-                    url = None
-                except Exception as e:
-                    print(f"An unexpected error occurred: {e}")
-                    url = None
-        
-        api_response['items'] = all_items
-        if api_response['items'] == []:
-            return  (
-                gr.HTML.update(value=_api.api_error_msg("no_items")),
-                gr.Textbox.update(value=number)
-            )
-        
-    if progress != None:
-        progress(1, desc="Processing final results...")
+        gl.url_list = {i+1: f"{base_url}{''.join(chunk)}" for i, chunk in enumerate(model_chunks)}
     
-    if from_ver:
-        updated_models, outdated_models = version_match(file_paths, api_response, include_variants)
-        
-        updated_set = set(updated_models)
-        outdated_set = set(outdated_models)
-        outdated_set = {model for model in outdated_set if model[0] not in {updated_model[0] for updated_model in updated_set}}
-        
-        all_model_ids = [model[0] for model in outdated_set]
-        all_model_names = [model[1] for model in outdated_set]
-        
-        for model_name in all_model_names:
-            print(f'"{model_name}" is currently outdated.')
-        
-        if len(all_model_ids) == 0:
-            no_update = True
-            gl.scan_files = False
+        if from_ver:
             return  (
-                    gr.HTML.update(value='<div style="font-size: 24px; text-align: center; margin: 50px !important;">No updates found for selected models.</div>'),
+                    gr.HTML.update(value='<div style="font-size: 24px; text-align: center; margin: 50px !important;">Outdated models have been found.<br>Please press the button above to load the models into the browser tab</div>'),
+                    gr.Textbox.update(value=number)
+                )
+
+        elif from_installed:
+            return  (
+                    gr.HTML.update(value='<div style="font-size: 24px; text-align: center; margin: 50px !important;">Installed models have been loaded.<br>Please press the button above to load the models into the browser tab</div>'),
+                    gr.Textbox.update(value=number)
+                )
+
+        elif from_tag:
+            completed_tags = 0
+            tag_count = len(file_paths)
+        
+            for file_path, id_value in zip(file_paths, all_ids):
+                install_path, file_name = os.path.split(file_path)
+                save_path, name = get_save_path_and_name(install_path, file_name, api_response)
+                model_versions = _api.update_model_versions(id_value, api_response)
+                html_path = os.path.join(save_path, f'{name}.html')
+            
+                if create_html and not os.path.exists(html_path) or create_html and overwrite_toggle:
+                    preview_html = _api.update_model_info(None, model_versions.get('value'), True, id_value, api_response, True)
+                else:
+                    preview_html = None
+                completed_tags += 1
+                if progress != None:
+                    progress(completed_tags / tag_count, desc=f'Saving tags{" & HTML" if preview_html else ""}... {completed_tags}/{tag_count} | {name}')
+                sub_folder = os.path.normpath(os.path.relpath(install_path, gl.main_folder))
+                save_model_info(install_path, file_name, sub_folder, preview_html=preview_html, api_response=api_response, overwrite_toggle=overwrite_toggle)
+            if progress != None:
+                progress(1, desc=f"All tags succesfully saved!")
+            time.sleep(2)
+            return  (
+                    gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
                     gr.Textbox.update(value=number)
                 )
     
-    model_chunks = list(chunks(all_model_ids, tile_count))
+        elif from_preview:
+            completed_preview = 0
+            preview_count = len(file_paths)
+            for file in file_paths:
+                _, file_name = os.path.split(file)
+                name = os.path.splitext(file_name)[0]
+                completed_preview += 1
+                if progress != None:
+                    progress(completed_preview / preview_count, desc=f"Saving preview images... {completed_preview}/{preview_count} | {name}")
+                save_preview(file, api_response, overwrite_toggle)
+            return  (
+                    gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
+                    gr.Textbox.update(value=number)
+                )
 
-    base_url = "https://civitai.com/api/v1/models?limit=100&nsfw=true"
-    gl.url_list = {i+1: f"{base_url}{''.join(chunk)}" for i, chunk in enumerate(model_chunks)}
-    
-    if from_ver:
+    finally:
         gl.scan_files = False
-        return  (
-                gr.HTML.update(value='<div style="font-size: 24px; text-align: center; margin: 50px !important;">Outdated models have been found.<br>Please press the button above to load the models into the browser tab</div>'),
-                gr.Textbox.update(value=number)
-            )
 
-    elif from_installed:
-        gl.scan_files = False
-        return  (
-                gr.HTML.update(value='<div style="font-size: 24px; text-align: center; margin: 50px !important;">Installed models have been loaded.<br>Please press the button above to load the models into the browser tab</div>'),
-                gr.Textbox.update(value=number)
-            )
-
-    elif from_tag:
-        completed_tags = 0
-        tag_count = len(file_paths)
-        
-        for file_path, id_value in zip(file_paths, all_ids):
-            install_path, file_name = os.path.split(file_path)
-            save_path, name = get_save_path_and_name(install_path, file_name, api_response)
-            model_versions = _api.update_model_versions(id_value, api_response)
-            html_path = os.path.join(save_path, f'{name}.html')
-            
-            if create_html and not os.path.exists(html_path) or create_html and overwrite_toggle:
-                preview_html = _api.update_model_info(None, model_versions.get('value'), True, id_value, api_response, True)
-            else:
-                preview_html = None
-            completed_tags += 1
-            if progress != None:
-                progress(completed_tags / tag_count, desc=f'Saving tags{" & HTML" if preview_html else ""}... {completed_tags}/{tag_count} | {name}')
-            sub_folder = os.path.normpath(os.path.relpath(install_path, gl.main_folder))
-            save_model_info(install_path, file_name, sub_folder, preview_html=preview_html, api_response=api_response, overwrite_toggle=overwrite_toggle)
-        if progress != None:
-            progress(1, desc=f"All tags succesfully saved!")
-        gl.scan_files = False
-        time.sleep(2)
-        return  (
-                gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
-                gr.Textbox.update(value=number)
-            )
-    
-    elif from_preview:
-        completed_preview = 0
-        preview_count = len(file_paths)
-        for file in file_paths:
-            _, file_name = os.path.split(file)
-            name = os.path.splitext(file_name)[0]
-            completed_preview += 1
-            if progress != None:
-                progress(completed_preview / preview_count, desc=f"Saving preview images... {completed_preview}/{preview_count} | {name}")
-            save_preview(file, api_response, overwrite_toggle)
-        gl.scan_files = False
-        return  (
-                gr.HTML.update(value='<div style="min-height: 0px;"></div>'),
-                gr.Textbox.update(value=number)
-            )
 
 def finish_returns():
     return (
