@@ -19,7 +19,7 @@ from modules.paths import models_path, extensions_dir, data_path
 from html import escape
 from scripts.civitai_global import print, debug_print
 import scripts.civitai_global as gl
-from scripts.civitai_storage import MODEL_EXTENSIONS, read_json
+from scripts.civitai_storage import MODEL_EXTENSIONS, read_json, sanitize_model_html
 import scripts.civitai_download as _download
 import scripts.civitai_file_manage as _file
 
@@ -281,9 +281,9 @@ def model_list_html(json_data):
                 image = item["modelVersions"][0]["images"][0]["url"]
                 if media_type == "video":
                     image = image.replace("width=", "transcode=true,width=")
-                    imgtag = f'<video class="video-bg" {playback} muted playsinline><source src="{image}" type="video/mp4"></video>'
+                    imgtag = f'<video class="video-bg" {playback} muted playsinline><source src="{escape(image, quote=True)}" type="video/mp4"></video>'
                 else:
-                    imgtag = f'<img src="{image}"></img>'
+                    imgtag = f'<img src="{escape(image, quote=True)}"></img>'
             else:
                 imgtag = f'<img src="./file=html/card-no-preview.png"></img>'
             
@@ -674,10 +674,14 @@ def update_model_info(model_string=None, model_version=None, only_html=False, in
                 if not model_uploader:
                     model_uploader = 'User not found'
                     uploader_avatar = 'https://rawcdn.githack.com/gist/BlafKing/8d3f7a19e3f72cfddab46ae835037ee6/raw/296e81afbdd268200278beef478f3018b15936de/profile_placeholder.svg'
-                uploader_avatar = f'<div class="avatar"><img src={uploader_avatar}></div>'
+                uploader_avatar = f'<div class="avatar"><img src="{escape(str(uploader_avatar), quote=True)}"></div>'
                 tags = item.get('tags', "")
                 model_desc = item.get('description', "")
                 if model_desc:
+                    # CivitAI ships real markup in this field, so plain escaping
+                    # would show raw tags and break the preview. Drop what is
+                    # executable, keep the formatting.
+                    model_desc = sanitize_model_html(model_desc)
                     model_desc = model_desc.replace('<img', '<img style="max-width: -webkit-fill-available;"')
                     model_desc = model_desc.replace('<code>', '<code style="text-wrap: wrap">')
                 selected_version = next(
@@ -706,6 +710,12 @@ def update_model_info(model_string=None, model_version=None, only_html=False, in
                 for file in selected_version['files']:
                     dl_dict[file['name']] = file['downloadUrl']
                     
+                    # Not an initialisation guard. The first file in the list is
+                    # adopted as the default, and a file flagged primary overrides
+                    # it further down. A version with several files and no primary
+                    # therefore falls back to whichever file the API lists first,
+                    # not to the smallest or newest one. Intentional, but it reads
+                    # as a guard, so it is spelled out here.
                     if not model_filename:
                         model_filename = os.path.splitext(file['name'])[0]
                         model_extension = os.path.splitext(file['name'])[1]
@@ -784,11 +794,11 @@ def update_model_info(model_string=None, model_version=None, only_html=False, in
                     image_url = re.sub(r'/width=\d+', f'/width={pic["width"]}', pic["url"])
                     if pic['type'] == "video":
                         image_url = image_url.replace("width=", "transcode=true,width=")
-                        img_html += f'<video data-sampleimg="true" {playback} muted playsinline><source src="{image_url}" type="video/mp4"></video>'
+                        img_html += f'<video data-sampleimg="true" {playback} muted playsinline><source src="{escape(image_url, quote=True)}" type="video/mp4"></video>'
                         meta_button = False
                         prompt_dict = {}
                     else:
-                        img_html += f'<img data-sampleimg="true" src="{image_url}">'
+                        img_html += f'<img data-sampleimg="true" src="{escape(image_url, quote=True)}">'
 
                     img_html += '''
                         </label>

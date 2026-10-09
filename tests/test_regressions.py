@@ -6,6 +6,7 @@ import os
 import time
 from collections import OrderedDict
 from collections import defaultdict
+from html.parser import HTMLParser
 from pathlib import Path
 import tempfile
 import types
@@ -655,3 +656,112 @@ def load_file_scan():
     }
     exec(compile(ast.Module(body=[node], type_ignores=[]), str(source), 'exec'), scope)
     return scope['file_scan'], scope
+
+
+class _AttrCollector(HTMLParser):
+    """Parse sanitized output so tests assert on attributes, not substrings."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.attrs = []
+
+    def handle_starttag(self, tag, attrs):
+        self.attrs.append((tag, dict(attrs)))
+
+    def handle_startendtag(self, tag, attrs):
+        self.attrs.append((tag, dict(attrs)))
+
+
+def _event_handler_attrs(markup):
+    parser = _AttrCollector()
+    parser.feed(markup)
+    parser.close()
+    return [name for _tag, attrs in parser.attrs
+            for name in attrs if name.lower().startswith('on')]
+
+
+def _attribute_values(markup, tag_name):
+    parser = _AttrCollector()
+    parser.feed(markup)
+    parser.close()
+    return [attrs for tag, attrs in parser.attrs if tag == tag_name]
+
+
+class SanitizerTests(unittest.TestCase):
+    """Regression guards for the XSS paths Eve found in update_model_info."""
+
+    def setUp(self):
+        from scripts.civitai_storage import sanitize_model_html
+        self.sanitize = sanitize_model_html
+
+    def test_script_tag_is_removed_with_its_body(self):
+        self.assertEqual(self.sanitize('<script>alert(1)</script>hi'), 'hi')
+
+    def test_event_handlers_are_stripped(self):
+        out = self.sanitize('<img src="https://x.test/a.png" onerror="alert(1)">')
+        self.assertEqual(_event_handler_attrs(out), [])
+        self.assertIn('https://x.test/a.png', out)
+
+    def test_unquoted_event_handler_is_stripped(self):
+        out = self.sanitize('<img src=x onerror=alert(1)>')
+        self.assertEqual(_event_handler_attrs(out), [])
+
+    def test_quotes_inside_an_attribute_cannot_inject_a_handler(self):
+        # The payload closes the alt value and tries to open a real onload. The
+        # whole thing has to end up as inert text inside the alt value.
+        out = self.sanitize('<img src="https://x.test/a.png" alt=\'a" onload="alert(1)\'>')
+        self.assertEqual(_event_handler_attrs(out), [])
+        self.assertEqual(_attribute_values(out, 'img'),
+                         [{'src': 'https://x.test/a.png',
+                           'alt': 'a" onload="alert(1)'}])
+
+    def test_relative_src_without_scheme_is_dropped(self):
+        # Not an over-strict test: a bare "x" is not a usable URL and is exactly
+        # the kind of value that would otherwise smuggle a payload.
+        self.assertEqual(_attribute_values(self.sanitize('<img src="x">'), 'img'), [{}])
+
+    def test_javascript_url_is_dropped(self):
+        out = self.sanitize('<a href="javascript:alert(1)">x</a>')
+        self.assertNotIn('javascript:', out)
+        for attrs in _attribute_values(out, 'a'):
+            self.assertNotIn('href', attrs)
+
+    def test_data_url_in_src_is_dropped(self):
+        out = self.sanitize('<img src="data:text/html;base64,PHNjcmlwdD4=">')
+        for attrs in _attribute_values(out, 'img'):
+            self.assertNotIn('src', attrs)
+
+    def test_iframe_and_svg_are_dropped(self):
+        for payload in ('<iframe src="https://x.test"></iframe>',
+                        '<svg onload="alert(1)"></svg>'):
+            out = self.sanitize(payload)
+            self.assertNotIn('<iframe', out)
+            self.assertNotIn('<svg', out)
+            self.assertEqual(_event_handler_attrs(out), [])
+
+    def test_legitimate_civitai_markup_survives(self):
+        # Escaping instead of sanitizing would break the preview entirely.
+        raw = ('<p>hello <strong>world</strong></p>'
+               '<img src="https://image.civitai.com/x.png">'
+               '<code>print(1)</code>'
+               '<a href="https://civitai.com/models/1">link</a>')
+        out = self.sanitize(raw)
+        self.assertIn('<strong>world</strong>', out)
+        self.assertIn('<code>', out)
+        self.assertEqual(_attribute_values(out, 'img'),
+                         [{'src': 'https://image.civitai.com/x.png'}])
+        self.assertEqual(_attribute_values(out, 'a'),
+                         [{'href': 'https://civitai.com/models/1'}])
+
+    def test_empty_and_none_input(self):
+        self.assertEqual(self.sanitize(''), '')
+        self.assertEqual(self.sanitize(None), '')
+
+    def test_api_module_has_no_raw_html_interpolation_left(self):
+        # Source-level guard so a future edit cannot silently reintroduce one of
+        # the four call sites that were vulnerable.
+        source = (Path(__file__).resolve().parents[1] / 'scripts' / 'civitai_api.py')
+        text = source.read_text(encoding='utf-8')
+        for pattern in ('src={uploader_avatar}', 'src="{image}"',
+                        'src="{image_url}"', 'src="{model_desc}"'):
+            self.assertNotIn(pattern, text, f'reintroduced raw interpolation: {pattern}')
