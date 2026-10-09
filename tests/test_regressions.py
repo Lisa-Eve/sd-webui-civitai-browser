@@ -937,3 +937,21 @@ class JsDeadCodeTests(unittest.TestCase):
         missing = sorted(name for name in called if f'function {name}(' not in js)
         self.assertEqual(missing, [],
                          f'bound in the GUI but missing in civitai-html.js: {missing}')
+
+
+    def test_create_civit_ai_card_buttons_takes_no_argument(self):
+        # addOnClickToButtons used to pass the click-event button to
+        # createCivitAICardButtons, but the function is defined with no
+        # parameters and never used the argument. The dead argument was
+        # removed from both callers.
+        js = self._js()
+        import re as _re
+        self.assertIn('function createCivitAICardButtons()', js)
+        # Asserting the definition alone does not prevent re-introduction:
+        # the argument lived at the call sites, not in the signature. Every
+        # call must therefore be bare.
+        calls = _re.findall(r'createCivitAICardButtons\(([^)]*)\)', js)
+        self.assertTrue(calls, 'expected at least one call site')
+        offending = [c for c in calls if c.strip()]
+        self.assertEqual(offending, [],
+                         f'argument passed at a call site again: {offending}')
