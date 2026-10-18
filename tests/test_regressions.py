@@ -853,6 +853,63 @@ class GlobalInitTests(unittest.TestCase):
             self.assertNotIn('UNLISTED_VALUE', report)
             self.assertIn('=== CivitAI Browser+ diagnostics ===', report)
 
+    def test_last_url_is_assigned_in_init(self):
+        # init() listed last_url in its `global` declaration but the old code
+        # never assigned it, so any reader of gl.last_url got AttributeError.
+        # Asserting the declaration is not enough: the assignment must exist.
+        # The check walks the AST of init() and collects every simple-name
+        # target of plain `=` and `+=` / `-=` style assignments.
+        import ast
+        source_path = (Path(__file__).resolve().parents[1]
+                       / 'scripts' / 'civitai_global.py')
+        tree = ast.parse(source_path.read_text(encoding='utf-8'))
+        init_func = next(n for n in tree.body
+                         if isinstance(n, ast.FunctionDef) and n.name == 'init')
+        assigned = set()
+        for node in ast.walk(init_func):
+            if isinstance(node, ast.Assign):
+                for target in node.targets:
+                    if isinstance(target, ast.Name):
+                        assigned.add(target.id)
+            elif isinstance(node, ast.AugAssign):
+                if isinstance(node.target, ast.Name):
+                    assigned.add(node.target.id)
+        self.assertIn('last_url', assigned,
+                      'init() does not assign last_url - it is only declared as global')
+
+    def test_print_and_debug_print_accept_multiple_args(self):
+        # The old single-arg versions of print() and debug_print() would raise
+        # TypeError on print("a", "b"). The fix uses *args, **kwargs with sep
+        # support so the shadowing is drop-in compatible with the built-in.
+        # Extracting the functions and exec'ing them in a stub scope is the
+        # lightest way to assert the behaviour without importing gradio.
+        import ast
+        source_path = (Path(__file__).resolve().parents[1]
+                       / 'scripts' / 'civitai_global.py')
+        tree = ast.parse(source_path.read_text(encoding='utf-8'))
+        for func_name in ('print', 'debug_print'):
+            func = next(n for n in tree.body
+                         if isinstance(n, ast.FunctionDef) and n.name == func_name)
+            written = []
+            printed = []
+            scope = {
+                '_write_file': lambda level, msg: written.append((level, msg)),
+                '_print': lambda *a, **kw: printed.append(a[0] if a else ''),
+                'debug_enabled': lambda: True,
+            }
+            exec(compile(ast.Module(body=[func], type_ignores=[]),
+                         str(source_path), 'exec'), scope)
+            scope[func_name]('hello', 'world', 'foo')
+            self.assertEqual(len(written), 1,
+                             f'{func_name}() did not write to log file')
+            self.assertEqual(written[0][1], 'hello world foo',
+                             f'{func_name}() did not join args with space (got {written[0][1]!r})')
+            # Also verify the sep keyword is honoured.
+            written.clear()
+            scope[func_name]('a', 'b', 'c', sep='-')
+            self.assertEqual(written[0][1], 'a-b-c',
+                             f'{func_name}() did not honour sep keyword (got {written[0][1]!r})')
+
 
 class JSPreviewSinkTests(unittest.TestCase):
     """The JS-side preview popup must not insert CivitAI HTML via raw innerHTML.

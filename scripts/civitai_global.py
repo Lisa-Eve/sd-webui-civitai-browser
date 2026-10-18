@@ -98,22 +98,29 @@ def log_path():
 _print = print
 
 
-def print(print_message):
-    """Console output, unchanged, plus the log file."""
+def print(*args, **kwargs):
+    """Console output, unchanged, plus the log file. Accepts *args like the
+    built-in so that calls like print("a", "b") do not raise TypeError. The
+    built-in `sep` keyword is honoured; `end` is not, because the original
+    single-arg version did not honour it either and the extension has no
+    callers that depend on it."""
+    sep = kwargs.get('sep', ' ')
     try:
-        text = str(print_message)
+        text = sep.join(str(arg) for arg in args)
     except Exception:
-        text = repr(print_message)
+        text = repr(args)
     _write_file("INFO", text)
     _print(f"\033[96mCivitAI Browser+\033[0m: {text}")
 
 
-def debug_print(print_message):
-    """Debug detail. Always written to the log file, console only when enabled."""
+def debug_print(*args, **kwargs):
+    """Debug detail. Always written to the log file, console only when enabled.
+    See `print` for the *args / sep rationale."""
+    sep = kwargs.get('sep', ' ')
     try:
-        text = str(print_message)
+        text = sep.join(str(arg) for arg in args)
     except Exception:
-        text = repr(print_message)
+        text = repr(args)
     _write_file("DEBUG", text)
     if debug_enabled():
         _print(f"\033[96m[DEBUG] CivitAI Browser+\033[0m: {text}")
@@ -232,6 +239,7 @@ def init():
     main_folder = None
     previous_inputs = None
     last_version = None
+    last_url = None
     url_list = {}
     download_queue = []
 
